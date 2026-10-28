@@ -3,7 +3,7 @@ const resources = new Set(['workspaces', 'servers', 'projects', 'containers'])
 
 export function createManagementApi(client) {
   const collection = resource => {
-    if (!resources.has(resource)) throw new TypeError(`Recurso inválido: ${resource}`)
+    if (!resources.has(resource)) throw new TypeError(`Invalid resource: ${resource}`)
     return client.collection(resource)
   }
   return {

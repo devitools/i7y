@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { flatten, hasInventory, matches } from '../apps/web/src/inventory.ts'
 const workspaces = [{login:'team@example.com',services:[{type:'VPS',ip:'192.0.2.10',name:'example',projects:[{name:'example',path:'/projects/example',containers:[{name:'example-web',image:'nginx:stable'},{name:'example-db',image:'mysql:5.7'}]}]}]}]
-test('preserva a ligação entre conta, servidor, projeto e contêiner', () => {
+test('preserves workspace, server, project and container relationships', () => {
   const data = flatten(workspaces)
   const container = data.containers.find(c => c.name === 'example-web')
   assert.equal(container.server.account, 'team@example.com')
@@ -13,12 +13,12 @@ test('preserva a ligação entre conta, servidor, projeto e contêiner', () => {
   assert.equal(data.services.length, workspaces.reduce((n,a)=>n+a.services.length,0))
   assert.equal(new Set(data.containers.map(c=>c.key)).size, data.containers.length)
 })
-test('diferencia consulta pendente de ausência de contêineres', () => {
+test('distinguishes pending discovery from an empty container inventory', () => {
   assert.equal(hasInventory({projects:null}), false)
   assert.equal(hasInventory({projects:[]}), true)
   assert.equal(hasInventory({}), false)
 })
-test('busca por imagem e IP, incluindo o campo limpo pelo usuário', () => {
+test('searches images and IP addresses, including a cleared search field', () => {
   const data = flatten(workspaces)
   assert.ok(matches(data.servers.find(s=>s.ip==='192.0.2.10'), 'MYSQL:5.7'))
   assert.equal(matches({}, null), true)

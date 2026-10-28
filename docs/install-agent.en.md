@@ -30,7 +30,7 @@ The target server does not need Go, Node or Python to run the agent. If you alre
 Connect through SSH using the correct port and identity. Verify the host key against a trusted source before accepting an unknown server.
 
 ```sh
-ssh -p 22 operador@server.example.com
+ssh -p 22 operator@server.example.com
 uname -m
 systemctl --version
 docker version
@@ -83,7 +83,7 @@ scp -P 22 \
   dist/SHA256SUMS \
   deploy/install.sh \
   deploy/i7y-agent.service \
-  operador@server.example.com:~/i7y-install/
+  operator@server.example.com:~/i7y-install/
 ```
 
 If necessary, add `-i /path/to/key` to the SSH and SCP commands. Do not copy the private key to the server.
@@ -242,7 +242,7 @@ sudo systemctl restart i7y-agent
 
 During a network failure, the agent keeps a local queue of up to 24 hours/288 samples and retries with backoff. The backend recognizes repeated samples to avoid duplicate history.
 
-If `/projects` is a symlink to a directory under `/home`, inspect the entire path with `namei -l /projects`. A home directory with mode `0700` blocks access even if the destination is readable. If needed, grant only traversal to the agent user on the ancestor directory, for example `sudo setfacl -m u:i7y-agent:--x /home/operador`. This does not allow listing that directory; project directories must still allow the read access required for discovery. Restart only `i7y-agent` and confirm the next delivery.
+If `/projects` is a symlink to a directory under `/home`, inspect the entire path with `namei -l /projects`. A home directory with mode `0700` blocks access even if the destination is readable. If needed, grant only traversal to the agent user on the ancestor directory, for example `sudo setfacl -m u:i7y-agent:--x /home/operator`. This does not allow listing that directory; project directories must still allow the read access required for discovery. Restart only `i7y-agent` and confirm the next delivery.
 
 ## 10. Stop or remove
 

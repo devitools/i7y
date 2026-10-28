@@ -5,7 +5,7 @@ COPY apps/web/package.json ./apps/web/package.json
 RUN npm ci
 COPY apps/web/index.html apps/web/vite.config.ts apps/web/tsconfig.json ./apps/web/
 COPY apps/web/src ./apps/web/src
-COPY docs/install-agent.*.md ./docs/
+COPY docs/install-agent.en.md ./docs/
 RUN npm run build
 FROM alpine:3.21
 ARG PB_VERSION=0.40.4

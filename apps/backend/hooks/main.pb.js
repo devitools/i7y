@@ -13,10 +13,10 @@ onBootstrap((e) => {
   const inventoryFile = $os.getenv('INVENTORY_FILE')
   if (!inventoryFile) return
   const data = JSON.parse(toString($os.readFile(inventoryFile)))
-  if (!Array.isArray(data)) throw new Error('O inventário deve ser um array de contas.')
+  if (!Array.isArray(data)) throw new Error('Inventory must be an array of workspaces.')
   const seen = new Set()
   for (const workspace of data) {
-    if (!workspace.login || !Array.isArray(workspace.services) || seen.has(workspace.login)) throw new Error('Conta inválida ou duplicada.')
+    if (!workspace.login || !Array.isArray(workspace.services) || seen.has(workspace.login)) throw new Error('Invalid or duplicate workspace.')
     seen.add(workspace.login)
   }
   e.app.runInTransaction((app) => {

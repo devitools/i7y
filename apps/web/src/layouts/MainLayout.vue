@@ -22,7 +22,7 @@
 
     <q-drawer v-model="leftDrawerOpen" show-if-above dark :width="232" class="app-drawer">
       <div class="drawer-controls">
-        <q-select v-model="locale" :options="languageOptions" emit-value map-options dense borderless dark aria-label="Language / Idioma / Мова" class="language-select" />
+        <q-select v-model="locale" :options="languageOptions" emit-value map-options dense borderless dark :aria-label="t('Language')" class="language-select" />
         <span class="backend-state"><i :class="{offline:error,pending:loading}" /><span>{{error ? t('API unavailable') : loading ? t('Loading') : 'API'}}</span></span>
         <q-btn flat round dense :icon="dark ? 'light_mode' : 'dark_mode'" :aria-label="t('Toggle theme')" @click="dark=!dark" />
       </div>

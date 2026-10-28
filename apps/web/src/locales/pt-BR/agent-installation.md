@@ -30,7 +30,7 @@ O servidor de destino não precisa ter Go, Node ou Python instalado para executa
 Entre por SSH, usando a porta e a identidade corretas. Valide a chave do host com uma fonte confiável antes de aceitar um servidor desconhecido.
 
 ```sh
-ssh -p 22 operador@server.example.com
+ssh -p 22 operator@server.example.com
 uname -m
 systemctl --version
 docker version
@@ -83,7 +83,7 @@ scp -P 22 \
   dist/SHA256SUMS \
   deploy/install.sh \
   deploy/i7y-agent.service \
-  operador@server.example.com:~/i7y-install/
+  operator@server.example.com:~/i7y-install/
 ```
 
 Se necessário, acrescente `-i /caminho/da/chave` aos comandos SSH e SCP. Não copie a chave privada para o servidor.
@@ -242,7 +242,7 @@ sudo systemctl restart i7y-agent
 
 Durante uma falha de rede, o agente mantém uma fila local de até 24 horas/288 amostras e tenta reenviar com backoff. O backend reconhece amostras repetidas para não duplicar o histórico.
 
-Se `/projects` for um symlink para uma pasta dentro de `/home`, confira todo o caminho com `namei -l /projects`. Um diretório pessoal com modo `0700` impede o acesso mesmo quando o destino permite leitura. Quando necessário, conceda somente travessia ao usuário do agente no diretório ancestral, por exemplo `sudo setfacl -m u:i7y-agent:--x /home/operador`. Isso não concede listagem desse diretório; os diretórios dos projetos ainda precisam permitir a leitura necessária à descoberta. Reinicie apenas `i7y-agent` e confirme o próximo envio.
+Se `/projects` for um symlink para uma pasta dentro de `/home`, confira todo o caminho com `namei -l /projects`. Um diretório pessoal com modo `0700` impede o acesso mesmo quando o destino permite leitura. Quando necessário, conceda somente travessia ao usuário do agente no diretório ancestral, por exemplo `sudo setfacl -m u:i7y-agent:--x /home/operator`. Isso não concede listagem desse diretório; os diretórios dos projetos ainda precisam permitir a leitura necessária à descoberta. Reinicie apenas `i7y-agent` e confirme o próximo envio.
 
 ## 10. Parar ou remover
 

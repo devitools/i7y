@@ -1,44 +1,44 @@
-# API de containers
+# Container API
 
-A API gerencia os registros do inventário i7y. As operações não criam, iniciam, param ou removem containers nos hosts Docker.
+The API manages i7y inventory records. These operations do not create, start, stop or remove containers on Docker hosts.
 
-## Autenticação
+## Authentication
 
-O login usa a coleção `users`, conforme o [guia de autenticação](api-auth.md). Leituras e escritas exigem uma sessão de usuário ou token de agente válido.
+Sign in through the `users` collection, as described in the [authentication guide](api-auth.md). Reads and writes require a valid user session or agent API token.
 
 ```sh
 curl http://localhost:8097/api/collections/users/auth-with-password \
   -H 'Content-Type: application/json' \
-  -d '{"identity":"usuario@example.com","password":"SUA_SENHA"}'
+  -d '{"identity":"user@example.com","password":"YOUR_PASSWORD"}'
 ```
 
-Copie o campo `token` da resposta para a variável `I7Y_TOKEN` da sua sessão de terminal. Não salve o token no código.
+Copy the response's `token` into the `I7Y_TOKEN` environment variable for your terminal session. Never store tokens in source code.
 
-## Listar e localizar um project
+## Find a project
 
-O container pertence a um project existente, identificado pelo ID do registro.
+A container belongs to an existing project, identified by its record ID.
 
 ```sh
 curl --get http://localhost:8097/api/collections/projects/records \
   -H "Authorization: Bearer $I7Y_TOKEN" \
-  --data-urlencode 'filter=name="meu-app"' \
+  --data-urlencode 'filter=name="example-app"' \
   --data-urlencode 'expand=server.workspace'
 ```
 
-A resposta paginada contém `page`, `perPage`, `totalItems`, `totalPages` e `items`. Use o `id` do item correto como `PROJECT_ID` nos exemplos abaixo.
+Paginated responses contain `page`, `perPage`, `totalItems`, `totalPages` and `items`. Use the matching item's `id` as `PROJECT_ID` below.
 
-## Cadastrar
+## Create
 
 ```sh
 curl http://localhost:8097/api/collections/containers/records \
-  -H "Authorization: $I7Y_TOKEN" \
+  -H "Authorization: Bearer $I7Y_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"project":"PROJECT_ID","name":"meu-app.web","image":"nginx:1.27","sort_order":0}'
+  -d '{"project":"PROJECT_ID","name":"example-app.web","image":"nginx:1.27","sort_order":0}'
 ```
 
-O sucesso retorna HTTP 200 e o registro criado, incluindo `id`. `project` é uma relação obrigatória. Use `name` e `image` preenchidos para identificar o container e a versão da imagem. `sort_order` é um número opcional usado na ordenação. Nome e imagem são metadados; a API não verifica a existência da imagem em um registry.
+Success returns HTTP 200 and the created record, including `id`. `project` is a required relation. Supply `name` and `image` to identify the container and image version. `sort_order` is an optional sorting number. Names and images are metadata; the API does not verify that an image exists in a registry.
 
-## Listar e filtrar
+## List and filter
 
 ```sh
 curl --get http://localhost:8097/api/collections/containers/records \
@@ -50,48 +50,48 @@ curl --get http://localhost:8097/api/collections/containers/records \
   --data-urlencode 'expand=project.server.workspace'
 ```
 
-Para buscar uma imagem exata, use `filter=image="nginx:1.27"`. A expansão traz as relações em `expand`, sem alterar os IDs dos campos originais.
+Use `filter=image="nginx:1.27"` for an exact image match. Expanded relations appear under `expand`; original relation IDs remain unchanged.
 
-## Consultar um container
+## Read a container
 
 ```sh
 curl 'http://localhost:8097/api/collections/containers/records/CONTAINER_ID?expand=project.server.workspace' \
   -H "Authorization: Bearer $I7Y_TOKEN"
 ```
 
-## Editar imagem, nome ou project
+## Update an image, name or project
 
-Envie somente os campos a alterar. Trocar `project` move o registro para outro project do inventário.
+Send only the fields to update. Changing `project` moves the inventory record to another project.
 
 ```sh
 curl -X PATCH http://localhost:8097/api/collections/containers/records/CONTAINER_ID \
-  -H "Authorization: $I7Y_TOKEN" \
+  -H "Authorization: Bearer $I7Y_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"image":"nginx:1.28","name":"meu-app.web"}'
+  -d '{"image":"nginx:1.28","name":"example-app.web"}'
 ```
 
-O sucesso retorna HTTP 200 e o registro atualizado.
+Success returns HTTP 200 and the updated record.
 
-## Excluir
+## Delete
 
 ```sh
 curl -X DELETE http://localhost:8097/api/collections/containers/records/CONTAINER_ID \
-  -H "Authorization: $I7Y_TOKEN"
+  -H "Authorization: Bearer $I7Y_TOKEN"
 ```
 
-O sucesso retorna HTTP 204, sem corpo. A exclusão é permanente no inventário. Excluir o project, server ou workspace pai também remove seus containers em cascata.
+Success returns HTTP 204 without a response body. Inventory deletion is permanent. Deleting the parent project, server or workspace also deletes its containers through cascading relations.
 
-## Erros
+## Errors
 
-As respostas de erro usam JSON com `status`, `message` e, quando houver validação, `data` com os erros por campo. Relação inválida ou criação sem permissão pode retornar 400. Registro inexistente ou edição/exclusão não permitida pode retornar 404; esse status sozinho não distingue ausência de permissão de registro inexistente.
+Error responses contain JSON with `status`, `message` and, for validation failures, field-level errors in `data`. Invalid relations or unauthorized creation can return 400. Missing records or unauthorized updates/deletions can return 404; that status alone does not distinguish a missing record from insufficient permissions.
 
-Para renovar uma sessão válida, envie `POST /api/collections/users/auth-refresh` com `Authorization: TOKEN`. Quando a sessão expirar, entre novamente.
+Refresh a valid session using `POST /api/collections/users/auth-refresh` with `Authorization: Bearer TOKEN`. Sign in again after the session expires.
 
-## Cliente JavaScript do i7y
+## Frontend TypeScript client
 
-Dentro do frontend, o cliente compartilhado usa a mesma sessão do login da interface:
+The shared frontend client uses the current interface session:
 
-```js
+```ts
 import { management } from './api'
 
 const result = await management.list('containers', {
@@ -101,15 +101,15 @@ const result = await management.list('containers', {
 })
 const container = await management.create('containers', {
   project: projectId,
-  name: 'meu-app.web',
+  name: 'example-app.web',
   image: 'nginx:1.27',
 })
 await management.update('containers', container.id, { image: 'nginx:1.28' })
 await management.remove('containers', container.id)
 ```
 
-Reinícios normais preservam as alterações no banco. A importação legada de inventário é opcional e exige configuração explícita do backend.
+Normal restarts preserve database changes. Legacy inventory import is optional and requires explicit backend configuration.
 
-## Acesso de agentes sem senha
+## Password-free agent access
 
-Para agentes, prefira um token criado em **Tokens da API** no i7y. Use `Authorization: Bearer TOKEN`; não forneça as credenciais do usuário. O [guia de autenticação](api-auth.md) explica permissões, validade, revogação e exemplos.
+Create an agent token through **API tokens** in i7y. Use `Authorization: Bearer TOKEN` instead of sharing user credentials. The [authentication guide](api-auth.md) covers permissions, expiration, revocation and examples.

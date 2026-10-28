@@ -71,3 +71,7 @@ See [container API](docs/containers-api.md), [telemetry](docs/telemetry.md) and 
 Keep credentials, actual inventory, migration rehearsals, deployment records, backups and installation-specific scripts under `.local/`. This directory is ignored by Git and excluded from Docker build contexts. Do not place private material in source, fixtures or documentation. No local-only files are required to build the product.
 
 See [third-party notices](THIRD_PARTY.md).
+
+## Project language
+
+Write source code, identifiers, errors, comments, test descriptions, examples and canonical documentation in English. Keep localized interface text and translated guides under `apps/web/src/locales/<locale>/`. English is the canonical language; localized catalogs must retain the same English keys. Historical installation material under ignored `.local/` is not part of the distributed project.

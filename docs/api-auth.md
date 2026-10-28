@@ -1,26 +1,26 @@
-# Autenticação e tokens da API
+# API authentication and tokens
 
-## Para pessoas
+## User sessions
 
-O login usa email e senha da coleção `users`. Após validar as credenciais, o PocketBase retorna um token de sessão. O frontend usa esse token nas requisições de gerenciamento. O acesso depende dos vínculos com organizações e dos papéis `admin`, `editor` e `reader`. Tokens também ficam limitados a uma organização. Consulte [organizações](organizations.md) para os contratos de contexto, convites e permissões.
+Sign in with the email and password of a `users` record. PocketBase returns a session token used by frontend management requests. Access depends on organization memberships and the `admin`, `editor` and `reader` roles. Agent tokens are also limited to one organization. See [organizations](organizations.md) for context, invitation and permission contracts.
 
-A coleção administrativa interna do PocketBase é reservada à manutenção técnica. Ela não é usada pelo login do i7y. A migração inicial copia os acessos administrativos já existentes para `users`, preservando o hash da senha. Não é necessário informar a senha novamente para a migração.
+The internal PocketBase administrative collection is reserved for maintenance and is not used for i7y login. The initial migration copies existing administrative accounts into `users`, preserving password hashes without requiring the original passwords.
 
-## Para agentes
+## Agent access
 
-Entre no i7y e clique em **Tokens da API → Criar token da API**. Escolha:
+Sign in to i7y and choose **API tokens → Create API token**. Set:
 
-- **Nome:** identifica o agente ou a tarefa.
-- **Permissão:** somente leitura, ou leitura e edição (inclui exclusão).
-- **Validade:** de 1 a 365 dias; o padrão é 30 dias.
+- **Name:** identifies the agent or task.
+- **Permission:** read only, or read and write (including deletion).
+- **Expiration:** 1–365 days; the default is 30 days.
 
-O segredo começa com `i7y_` e aparece somente após a criação. Copie-o e forneça ao agente junto com a URL do i7y. O agente não precisa receber email, senha ou token da sessão do navegador. Se perder o segredo, revogue a chave e crie outra.
+The secret starts with `i7y_` and is displayed only once after creation. Give the agent this token and the i7y URL. Do not share your email/password or browser session token. Revoke a lost key and create another one.
 
-Exemplo de instrução para um agente:
+Example agent instruction:
 
-> Use a API do i7y em http://localhost:8097. O token estará na variável I7Y_TOKEN. Envie Authorization: Bearer seguido do token. Consulte os registros em /api/collections/containers/records. Não imprima nem salve o segredo em arquivos do projeto.
+> Use the i7y API at http://localhost:8097. The token is in I7Y_TOKEN. Send Authorization: Bearer followed by the token. Read records at /api/collections/containers/records. Never print the secret or save it in project files.
 
-`localhost` refere-se à máquina onde o agente executa. Um agente remoto precisa de uma URL acessível a ele; a instalação padrão do Docker publica o serviço somente na máquina local.
+`localhost` refers to the machine running the agent. A remote agent needs a URL it can reach; the default Docker setup publishes the backend only on the local machine.
 
 ```sh
 curl --get http://localhost:8097/api/collections/containers/records \
@@ -29,56 +29,54 @@ curl --get http://localhost:8097/api/collections/containers/records \
   --data-urlencode 'perPage=50'
 ```
 
-Um token de leitura e edição também pode usar `POST`, `PATCH` e `DELETE` nos quatro recursos de inventário. Ele não inicia nem para containers reais.
+A read/write token can also use `POST`, `PATCH` and `DELETE` on the four inventory resources. These operations do not start or stop actual containers.
 
-## Limites de acesso
+## Access boundaries
 
-| Credencial | Acesso |
+| Credential | Access |
 | --- | --- |
-| Token da sessão do usuário | Inventário, seu próprio perfil e gerenciamento dos seus tokens |
-| Token de agente: leitura | GET de registros dos quatro recursos |
-| Token de agente: leitura e edição | GET, POST, PATCH e DELETE de registros dos quatro recursos |
+| User session token | Inventory, own profile and own API token management |
+| Read-only agent token | GET records from the four inventory resources |
+| Read/write agent token | GET, POST, PATCH and DELETE inventory records |
 
-Tokens de agentes não acessam usuários, configurações, autenticação, renovação de sessão, criação de tokens, operações em lote ou realtime. As permissões abrangem os workspaces da organização do token do inventário. São aceitos no cabeçalho `Authorization`, com ou sem o prefixo `Bearer`; prefira o formato `Bearer` nos clientes.
+Agent tokens cannot access users, settings, authentication, session refresh, token creation, batch operations or realtime. Permissions apply to inventory workspaces in the token's organization. The `Authorization` header accepts the token with or without `Bearer`; clients should use `Bearer`.
 
-O inventário é privado. Todas as consultas e alterações exigem uma sessão de usuário ou token de agente válido. Sem autenticação, os endpoints de registros retornam HTTP 401. O frontend redireciona qualquer tela protegida para o login e retoma o link solicitado após entrar. O login não carrega registros nem exibe a navegação privada.
+Inventory is private. Every query and mutation requires a valid user session or agent token. Unauthenticated record requests return HTTP 401. The frontend redirects protected routes to login and resumes the requested link after authentication. Login does not load inventory records or display private navigation.
 
-## Validade e revogação
+## Expiration and revocation
 
-O servidor verifica o hash do token e sua validade em cada requisição. Ele não guarda o segredo em texto puro. A listagem mostra nome, prefixo, permissão e vencimento.
+The server checks the token hash and expiration on every request. It never stores the secret as plain text. Token lists expose only metadata such as name, prefix, permission and expiration.
 
-Abra **Tokens da API → Revogar** para revisar a chave e confirmar a revogação em uma página própria. A chave deixa de funcionar nas chamadas seguintes. Sua sessão e as outras chaves continuam válidas. A exclusão do usuário remove suas chaves em cascata; a troca de senha não substitui a revogação das chaves.
+Choose **API tokens → Revoke** to review and confirm a key revocation on its own route. The key stops working on subsequent requests; your session and other keys remain valid. Deleting a user cascades to their keys. Changing a password does not replace key revocation.
 
-Quando o token expirar, crie outro. Agentes não podem renovar o próprio token nem emitir chaves adicionais. Cada usuário pode manter até 100 chaves; revogue as que não usa.
+Create a new token after expiration. Agents cannot renew their tokens or issue additional keys. Each user may hold up to 100 keys; revoke unused keys.
 
-## API de gerenciamento de chaves
+## Key management API
 
-Estes endpoints exigem o token de sessão de um usuário `users`, obtido pelo login. Tokens de agentes não podem acessá-los.
+These endpoints require a `users` session token obtained through login. Agent tokens cannot call them.
 
-| Método e caminho | Comportamento |
+| Method and path | Behavior |
 | --- | --- |
-| `GET /api/i7y/tokens` | Lista somente os metadados das suas chaves |
-| `POST /api/i7y/tokens` | Cria uma chave e retorna o segredo uma única vez |
-| `DELETE /api/i7y/tokens/ID` | Revoga uma chave sua |
-
-Exemplo de criação:
+| `GET /api/i7y/tokens` | List metadata for your own keys |
+| `POST /api/i7y/tokens` | Create a key and return its secret once |
+| `DELETE /api/i7y/tokens/ID` | Revoke one of your keys |
 
 ```sh
 curl http://localhost:8097/api/i7y/tokens \
   -H "Authorization: Bearer $I7Y_SESSION_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"label":"Agente de revisão","scope":"read","days":30}'
+  -d '{"label":"Review agent","scope":"read","days":30}'
 ```
 
-O sucesso retorna HTTP 201 com `id`, `label`, `prefix`, `scope`, `expires_at`, `created` e `token`. A listagem nunca retorna `token` nem seu hash. Um agente pode consultar `GET /api/i7y/token` para verificar o nome, a permissão e o vencimento da própria chave, sem acesso às demais. A revogação retorna HTTP 204. Token de agente inválido, expirado ou revogado retorna 401; tentativa fora do escopo retorna 403.
+Creation returns HTTP 201 with `id`, `label`, `prefix`, `scope`, `expires_at`, `created` and `token`. Lists never expose `token` or its hash. An agent can call `GET /api/i7y/token` to inspect its own name, permission and expiration without access to other keys. Revocation returns HTTP 204. Invalid, expired or revoked agent tokens return 401; out-of-scope requests return 403.
 
-## Validação de desenvolvimento
+## Development validation
 
-`tests/api-tokens.integration.py` verifica as permissões, limites de rotas, revogação, expiração e isolamento entre usuários contra um backend descartável. Configure `I7Y_TEST_URL`, `I7Y_TEST_EMAIL` e `I7Y_TEST_PASSWORD`; o ambiente de teste deve ter um usuário e um superusuário com as mesmas credenciais de teste. O script cria e exclui registros de teste. Execute apenas em ambiente descartável, nunca no inventário de trabalho.
+`tests/api-tokens.integration.py` checks permissions, route boundaries, revocation, expiration and user isolation against a disposable backend. Set `I7Y_TEST_URL`, `I7Y_TEST_EMAIL` and `I7Y_TEST_PASSWORD`; the test environment needs a user and a superuser with those same test credentials. The script creates and deletes test records. Run it only against disposable data, never against a working inventory.
 
-## Primeiro acesso em uma instalação vazia
+## First access to an empty installation
 
-Em uma instalação local confiável, crie um superusuário de manutenção usando o PocketBase:
+Create a maintenance superuser on a trusted local installation:
 
 ```sh
 read -r -s I7Y_BOOTSTRAP_PASSWORD
@@ -87,6 +85,6 @@ docker compose exec -e I7Y_BOOTSTRAP_PASSWORD pocketbase sh -c '/pb/bin/0.40.4/p
 unset I7Y_BOOTSTRAP_PASSWORD
 ```
 
-Substitua o email de exemplo. Abra `http://127.0.0.1:8097/_/` na máquina local e entre com esse acesso de manutenção. Na coleção `users`, crie o usuário humano com email, senha e `global_admin=true`. Na coleção `organization_memberships`, associe esse usuário à organização inicial com papel `admin`. Entre no i7y usando o usuário humano. O superusuário de manutenção não é uma conta de login do i7y e deve permanecer restrito à administração local.
+Replace the example email. Open `http://127.0.0.1:8097/_/` locally and sign in with the maintenance account. Create the human user in `users` with an email, password and `global_admin=true`. Add an `admin` membership linking that user to the initial organization in `organization_memberships`. Sign in to i7y using the human user. The maintenance superuser is not an i7y login account and must remain restricted to local administration.
 
-Em servidores remotos, use um túnel SSH para a porta de loopback. Não exponha o painel administrativo publicamente. Senhas e dados da instalação não devem ser salvos no repositório.
+For remote servers, use an SSH tunnel to the loopback port. Do not expose the administrative interface publicly or store installation passwords/data in the repository.

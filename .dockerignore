@@ -15,4 +15,4 @@
 !apps/backend/migrations/
 !apps/backend/migrations/**
 !docs/
-!docs/install-agent.*.md
+!docs/install-agent.en.md

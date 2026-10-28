@@ -5,9 +5,9 @@ import { management } from '../api'
 import { t, locale } from '../i18n'
 import { routeHash } from '../routes'
 import { guideBlocks, guideText } from '../agent-guide'
-import ptGuide from '../../../../docs/install-agent.pt-BR.md?raw'
+import ptGuide from '../locales/pt-BR/agent-installation.md?raw'
 import enGuide from '../../../../docs/install-agent.en.md?raw'
-import ukGuide from '../../../../docs/install-agent.uk.md?raw'
+import ukGuide from '../locales/uk/agent-installation.md?raw'
 const guides={'pt-BR':ptGuide,en:enGuide,uk:ukGuide}
 const props=defineProps({serverId:{type:String,required:true}})
 const q=useQuasar(), server=ref(null), error=ref(''), loading=ref(true)
