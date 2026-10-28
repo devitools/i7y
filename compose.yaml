@@ -1,11 +1,17 @@
 services:
   pocketbase:
-    build: .
+    image: alpine:3.21
+    entrypoint: ["/bin/sh", "/pb/bootstrap.sh"]
+    command: ["serve", "--http=0.0.0.0:8090", "--dir=/pb/pb_data", "--migrationsDir=/pb/migrations", "--hooksDir=/pb/hooks", "--automigrate=true", "--hooksWatch=true"]
+    working_dir: /pb
     ports:
       - "127.0.0.1:${INVENTORY_PORT:-8097}:8090"
     volumes:
       - inventory_data:/pb/pb_data
       - inventory_binary:/pb/bin
+      - ./apps/backend/bootstrap.sh:/pb/bootstrap.sh:ro
+      - ./apps/backend/hooks:/pb/hooks:ro
+      - ./apps/backend/migrations:/pb/migrations:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8090/api/health"]

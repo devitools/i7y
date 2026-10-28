@@ -63,12 +63,10 @@ CPU is sampled usage; container CPU can exceed 100% on multicore hosts. Memory e
 
 ## Deployment and recovery
 
-Build the UI and production image locally, then transfer the image privately to the host:
+Build the production image, including the frontend, then transfer it privately to the host:
 
 ```sh
-npm ci
-npm run build
-docker build --platform linux/amd64 -f Dockerfile.production -t i7y:0.1.1 .
+docker build --platform linux/amd64 -t i7y:VERSION .
 ```
 
 `deploy/compose.production.yaml` supports Compose 1.24 and the existing external `reverse-proxy` network. Set `I7Y_DOMAIN` in the deployment host's private `.env`. The app binds its direct port to loopback. Install `deploy/proxy-vhost.conf` as the domain-specific nginx-proxy vhost include and validate nginx before reloading. Administrative APIs and the admin UI are blocked at the public proxy; use an SSH tunnel to loopback for maintenance.

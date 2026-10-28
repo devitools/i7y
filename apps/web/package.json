@@ -24,5 +24,8 @@
     "vue-tsc": "^3.3.13",
     "typescript": "~5.9.3",
     "@types/node": "^22.20.5"
+  },
+  "volta": {
+    "extends": "../../package.json"
   }
 }

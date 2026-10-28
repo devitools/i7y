@@ -11,11 +11,18 @@
     "build": "npm run build:web",
     "build:web": "npm run build --workspace @i7y/web",
     "test": "tsx --test tests/*.test.js",
-    "start": "docker compose up --build -d",
-    "stop": "docker compose down",
-    "typecheck": "npm run typecheck --workspace @i7y/web"
+    "start": "npm run backend:up",
+    "stop": "npm run backend:down",
+    "typecheck": "npm run typecheck --workspace @i7y/web",
+    "backend:up": "docker compose up -d",
+    "backend:down": "docker compose down",
+    "backend:logs": "docker compose logs -f pocketbase"
   },
   "devDependencies": {
     "tsx": "^4.23.15"
+  },
+  "volta": {
+    "node": "22.23.4",
+    "npm": "10.9.9"
   }
 }

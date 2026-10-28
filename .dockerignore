@@ -10,7 +10,6 @@
 !apps/web/src/
 !apps/web/src/**
 !apps/backend/
-!apps/backend/bootstrap.sh
 !apps/backend/hooks/
 !apps/backend/hooks/**
 !apps/backend/migrations/

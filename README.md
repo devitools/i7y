@@ -16,35 +16,53 @@ Authenticated infrastructure inventory and telemetry, built with Vue, Quasar, Po
 
 ## Development
 
-Use Node.js 22 or newer and Docker Compose. From the repository root:
+Install [Volta](https://volta.sh) and Docker Compose. Node and npm versions are pinned in the root `package.json`; Volta selects them automatically when you run commands in this repository.
 
 ```sh
 npm ci
-npm test
-npm run typecheck
-npm run build:web
-npm start
+docker compose up -d
 npm run dev
 ```
 
-PocketBase serves the application at `http://127.0.0.1:8097`. Vite serves development assets at `http://127.0.0.1:5177` and proxies API requests to PocketBase. The frontend uses TypeScript, including Vue script blocks and Vite configuration. `npm run typecheck` checks the frontend with vue-tsc, and every web build runs that check first. Tests remain JavaScript and use tsx to import the TypeScript modules. PocketBase hooks and migrations remain JavaScript. Type checking is enabled with the existing dynamic API boundaries preserved; strict mode is not enabled yet.
+Compose starts **only PocketBase**, available at `http://127.0.0.1:8097`. It mounts the backend hooks and migrations read-only, watches hooks for local development and keeps the database and cached PocketBase binary in named volumes. First startup downloads and verifies PocketBase 0.40.4. Subsequent startups reuse the cached binary. No frontend, Node installation or application image build runs in Compose.
 
-The web workspace owns frontend dependencies; the root npm workspace owns the shared lockfile. Go and Rust keep their own toolchains.
-
-A new database starts without infrastructure inventory. Create the first user through trusted local administration; see [authentication](docs/api-auth.md). The initial organization is named `Initial organization`. Existing databases keep their organization names and memberships.
-
-`VITE_POCKETBASE_URL` can configure the frontend API endpoint at build time; its default is the same origin. The optional backend `INVENTORY_FILE` enables a legacy JSON import and must reference a private, explicitly mounted file. It is not required for normal operation.
-
-## Builds and deployment
+Vite runs directly on the host at `http://127.0.0.1:5177`, with hot reload and an API proxy to PocketBase. Open this URL to use the frontend. PocketBase's loopback port also exposes its administrative UI for trusted local setup. The web workspace uses the same Volta versions as the root.
 
 ```sh
-docker compose build
+npm test
+npm run typecheck
+npm run build:web
+npm run backend:logs
+npm run backend:down
+```
+
+`npm start` and `npm stop` are aliases for starting and stopping the local backend. `docker compose down` preserves data; do not add `--volumes` unless you intend to delete the local database.
+
+The frontend uses TypeScript, including Vue script blocks and Vite configuration. Every web build runs vue-tsc first. Tests remain JavaScript and use tsx to import TypeScript modules. PocketBase hooks and migrations remain JavaScript. Type checking preserves existing dynamic API boundaries; strict mode is not enabled yet.
+
+The web workspace owns frontend dependencies; the root npm workspace owns the shared lockfile. Go and Rust keep their own toolchains. A new database starts without infrastructure inventory. See [authentication](docs/api-auth.md) to create the first user through trusted local administration. Existing database contents are preserved.
+
+`VITE_POCKETBASE_URL` configures the frontend API endpoint at build time and defaults to the same origin. The development proxy targets port 8097. If you override `INVENTORY_PORT`, also configure `VITE_POCKETBASE_URL` for that backend. The optional backend `INVENTORY_FILE` enables an explicitly mounted private legacy import; normal operation does not require it.
+
+## Production image
+
+The single root `Dockerfile` builds the frontend in a Node stage, then copies static assets, hooks and migrations into a PocketBase runtime image. Node and npm are not included in the runtime. PocketBase is downloaded and checksum-verified during the image build, with amd64 and arm64 support; startup requires no downloads.
+
+```sh
+docker build -t i7y:VERSION .
+```
+
+A single `.dockerignore` allowlists required sources and excludes `.local/`, dependencies, generated builds and private files. A prior host frontend build is not required.
+
+Configure `I7Y_DOMAIN` and `I7Y_VERSION` for `deploy/compose.production.yaml`. This production template uses the built image and an external reverse proxy; it is separate from the local development Compose. Its `data` bind mount is relative to the Compose file, so preserve the existing deployment's data mount when upgrading. Building an image does not deploy it.
+
+## Collector
+
+```sh
 cd apps/agent
 go test ./...
 ./build.sh
 ```
-
-For the production runtime image, run `npm run build:web` followed by `docker build -f Dockerfile.production -t i7y:VERSION .`. Configure `I7Y_DOMAIN` and `I7Y_VERSION` for `deploy/compose.production.yaml`. Its `data` bind mount is relative to the Compose file; preserve the existing deployment's data mount when upgrading. No deployment is performed by a build.
 
 See [container API](docs/containers-api.md), [telemetry](docs/telemetry.md) and [agent installation](docs/install-agent.en.md).
 
