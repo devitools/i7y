@@ -1,0 +1,24 @@
+{
+  "name": "@i7y/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5177",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 5177"
+  },
+  "dependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
+    "@quasar/extras": "^1.16.0",
+    "pocketbase": "^0.26.0",
+    "quasar": "^2.24.0",
+    "vue": "^3.5.0"
+  },
+  "devDependencies": {
+    "@quasar/vite-plugin": "^1.10.0",
+    "@vitejs/plugin-vue": "^6.0.0",
+    "sass-embedded": "^1.93.2",
+    "vite": "^7.1.0"
+  }
+}

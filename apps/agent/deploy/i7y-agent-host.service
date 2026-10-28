@@ -1,0 +1,21 @@
+[Unit]
+Description=i7y telemetry agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=i7y-agent
+Group=i7y-agent
+ExecStart=/usr/local/bin/i7y-agent -config /etc/i7y-agent/config.json
+Restart=always
+RestartSec=10
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,18 @@
+services:
+  pocketbase:
+    build: .
+    ports:
+      - "127.0.0.1:${INVENTORY_PORT:-8097}:8090"
+    volumes:
+      - inventory_data:/pb/pb_data
+      - inventory_binary:/pb/bin
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8090/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+volumes:
+  inventory_data:
+  inventory_binary:

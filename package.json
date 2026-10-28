@@ -1,0 +1,17 @@
+{
+  "name": "i7y",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/web"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @i7y/web",
+    "build": "npm run build:web",
+    "build:web": "npm run build --workspace @i7y/web",
+    "test": "node --test tests/*.test.js",
+    "start": "docker compose up --build -d",
+    "stop": "docker compose down"
+  }
+}
