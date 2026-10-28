@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {metricLimits,metricLevels,metricLevel} from '../apps/web/src/metric-scale.js'
+import {metricLimits,metricLevels,metricLevel} from '../apps/web/src/metric-scale.ts'
 test('resource boundaries advance severity at exact thresholds',()=>{
  for(const [key,limits] of Object.entries(metricLimits)) {
   assert.equal(metricLevel(key,0).label,'Comfortable')

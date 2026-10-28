@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { telemetryApi, management, inventoryPage } from '../api'
@@ -7,7 +7,7 @@ import { routeHash } from '../routes'
 import { containerSummary, containerGroup, memoryPercent, diskPercent, timestamp } from '../telemetry-summary'
 import TelemetryTrend from './TelemetryTrend.vue'
 const props=defineProps({canEdit:Boolean,initialServer:{type:String,default:null}})
-const q=useQuasar(), servers=ref([]), server=ref(props.initialServer), currentContainers=ref([]), agents=ref([]), samples=ref([]), latest=ref(null), days=ref(1/4), busy=ref(false), error=ref(''), secret=ref(''), confirming=ref(false), now=ref(Date.now()), settings=ref(false), settingsBusy=ref(false), rankingMetric=ref('cpu')
+const q=useQuasar(), servers=ref([]), server=ref(props.initialServer), currentContainers=ref([]), agents=ref([]), samples=ref([]), latest=ref(null), days=ref(1/4), busy=ref(false), error=ref(''), secret=ref(''), confirming=ref<false | 'provision' | 'revoke'>(false), now=ref(Date.now()), settings=ref(false), settingsBusy=ref(false), rankingMetric=ref('cpu')
 let generation=0, timer=null, lookupGeneration=0
 const options=computed(()=>{const list=servers.value.map(s=>({label:s.name || s.ip || s.id,value:s.id}));if(latest.value && !list.some(s=>s.value===latest.value.id))list.unshift({label:latest.value.name || latest.value.ip,value:latest.value.id});return list})
 const agent=computed(()=>agents.value.find(a=>a.server===server.value))
@@ -17,7 +17,7 @@ const operatingSystem=computed(()=>{const os=last.value?.host?.operating_system;
 const windowsHost=computed(()=>last.value?.host?.operating_system?.family==='windows' || last.value?.host?.os==='windows')
 const sessionLabel=value=>t(value===true?'RDP session active':value===false?'No active RDP session':'unknown')
 const sessionRows=computed(()=>samples.value.map(s=>({observed_at:s.observed_at,active:s.payload?.host?.rdp_session_active})).sort((a,b)=>timestamp(b.observed_at)-timestamp(a.observed_at)))
-const sessionColumns=computed(()=>[{name:'observed_at',label:t('Collected at'),field:'observed_at',format:date,align:'left'},{name:'active',label:t('RDP session'),field:'active',format:sessionLabel,align:'left'}])
+const sessionColumns=computed(()=>[{name:'observed_at',label:t('Collected at'),field:'observed_at',format:date,align:'left' as const},{name:'active',label:t('RDP session'),field:'active',format:sessionLabel,align:'left' as const}])
 const stale=computed(()=>!!last.value?.observed_at && now.value-timestamp(last.value.observed_at)>900000)
 const status=computed(()=>!last.value?.observed_at?'No telemetry':stale.value?'No communication':last.value.state || 'unknown')
 const statusColor=computed(()=>status.value==='healthy'?'positive':status.value==='degraded'?'warning':'grey')
@@ -40,7 +40,7 @@ const metrics=computed(()=>[
 ])
 const notices=computed(()=>[...(last.value?.errors || []),...(last.value?.warnings || [])])
 const attention=computed(()=>currentContainers.value.filter(r=>containerGroup(r)==='attention').map(r=>({...r,state:r.telemetry.state,health:r.telemetry.health || '—'})))
-const columns=computed(()=>[{name:'name',label:t('Container'),field:'name',align:'left',sortable:true},{name:'state',label:t('State'),field:'state',align:'left'},{name:'health',label:'Healthcheck',field:'health',align:'left'}])
+const columns=computed(()=>[{name:'name',label:t('Container'),field:'name',align:'left' as const,sortable:true},{name:'state',label:t('State'),field:'state',align:'left' as const},{name:'health',label:'Healthcheck',field:'health',align:'left' as const}])
 const ranking=computed(()=>currentContainers.value.filter(r=>Number.isFinite(r.telemetry?.[rankingMetric.value==='cpu'?'cpu_percent':'memory_bytes'])).map(r=>({id:r.id,name:r.name,value:r.telemetry[rankingMetric.value==='cpu'?'cpu_percent':'memory_bytes']})).sort((a,b)=>b.value-a.value).slice(0,5))
 const rankingMax=computed(()=>Math.max(1,...ranking.value.map(r=>r.value)))
 const serverLink=computed(()=>routeHash({view:'projects',server:server.value}))

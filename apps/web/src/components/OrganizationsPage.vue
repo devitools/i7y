@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { activeOrganization, organizationChoices, globalAdmin, organizationApi, loadOrganizations, management } from '../api'
@@ -23,11 +23,11 @@ const back=computed(()=>section.value==='organizations'?'#/organizations':'#/org
 const rows=computed(()=>section.value==='organizations'?organizationChoices.value:section.value==='members'?members.value:invitations.value)
 const status=row=>t(row.used_at?'Accepted':row.revoked_at?'Revoked':Date.parse(row.expires_at?.replace(' ','T'))<=Date.now()?'Expired':'Pending')
 const columns=computed(()=>[
-  {name:'name',label:t(section.value==='invitations'?'Email':'Name'),field:row=>row.name || row.email,align:'left',sortable:true},
-  ...(section.value==='members'?[{name:'email',label:t('Email'),field:'email',align:'left',sortable:true}]:[]),
-  {name:'role',label:t('Permission'),field:row=>roleLabel(row.role),align:'left',sortable:true},
-  ...(section.value==='invitations'?[{name:'status',label:t('Status'),field:status,align:'left'},{name:'expires',label:t('Expires'),field:row=>new Date(row.expires_at.replace(' ','T')).toLocaleString(locale.value),align:'left'}]:[]),
-  {name:'action',label:'',field:'id',align:'right'},
+  {name:'name',label:t(section.value==='invitations'?'Email':'Name'),field:row=>row.name || row.email,align:'left' as const,sortable:true},
+  ...(section.value==='members'?[{name:'email',label:t('Email'),field:'email',align:'left' as const,sortable:true}]:[]),
+  {name:'role',label:t('Permission'),field:row=>roleLabel(row.role),align:'left' as const,sortable:true},
+  ...(section.value==='invitations'?[{name:'status',label:t('Status'),field:status,align:'left' as const},{name:'expires',label:t('Expires'),field:row=>new Date(row.expires_at.replace(' ','T')).toLocaleString(locale.value),align:'left' as const}]:[]),
+  {name:'action',label:'',field:'id',align:'right' as const},
 ])
 const allowed=computed(()=>section.value==='organizations'?(action.value==='edit'?admin.value:listing.value || globalAdmin.value):admin.value)
 const required=value=>!!String(value || '').trim() || t('Required field')

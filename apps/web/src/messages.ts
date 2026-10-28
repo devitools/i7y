@@ -1,6 +1,6 @@
 export const messages = {
   "en": {
-    "Operating system": "Operating system",
+
     "All operating systems": "All operating systems",
     "Not reported": "Not reported",
 
@@ -325,7 +325,7 @@ export const messages = {
     "Promote another administrator before removing or changing this member.": "Promote another administrator before removing or changing this member."
   },
   "pt-BR": {
-    "Operating system": "Sistema operacional",
+
     "All operating systems": "Todos os sistemas",
     "Not reported": "Não informado",
 
@@ -650,7 +650,7 @@ export const messages = {
     "Promote another administrator before removing or changing this member.": "Promova outro administrador antes de remover ou alterar este membro."
   },
   "uk": {
-    "Operating system": "Операційна система",
+
     "All operating systems": "Усі операційні системи",
     "Not reported": "Не вказано",
 

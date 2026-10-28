@@ -2,7 +2,7 @@ import {test} from 'node:test'
 import assert from 'node:assert/strict'
 import {readFileSync} from 'node:fs'
 import vm from 'node:vm'
-import {serverStats} from '../apps/web/src/telemetry-summary.js'
+import {serverStats} from '../apps/web/src/telemetry-summary.ts'
 const context={module:{exports:{}}}
 vm.runInNewContext(readFileSync(new URL('../apps/backend/hooks/lib/telemetry.js',import.meta.url),'utf8'),context)
 const {validate,reconcile}=context.module.exports

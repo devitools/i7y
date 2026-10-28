@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import { ref,onMounted,onUnmounted } from 'vue'
 import { organizationApi, management, authStore } from '../api'
 import { t } from '../i18n'

@@ -21,12 +21,15 @@ Use Node.js 22 or newer and Docker Compose. From the repository root:
 ```sh
 npm ci
 npm test
+npm run typecheck
 npm run build:web
 npm start
 npm run dev
 ```
 
-PocketBase serves the application at `http://127.0.0.1:8097`. Vite serves development assets at `http://127.0.0.1:5177` and proxies API requests to PocketBase. The web workspace owns frontend dependencies; the root npm workspace owns the shared lockfile. Go and Rust keep their own toolchains.
+PocketBase serves the application at `http://127.0.0.1:8097`. Vite serves development assets at `http://127.0.0.1:5177` and proxies API requests to PocketBase. The frontend uses TypeScript, including Vue script blocks and Vite configuration. `npm run typecheck` checks the frontend with vue-tsc, and every web build runs that check first. Tests remain JavaScript and use tsx to import the TypeScript modules. PocketBase hooks and migrations remain JavaScript. Type checking is enabled with the existing dynamic API boundaries preserved; strict mode is not enabled yet.
+
+The web workspace owns frontend dependencies; the root npm workspace owns the shared lockfile. Go and Rust keep their own toolchains.
 
 A new database starts without infrastructure inventory. Create the first user through trusted local administration; see [authentication](docs/api-auth.md). The initial organization is named `Initial organization`. Existing databases keep their organization names and memberships.
 

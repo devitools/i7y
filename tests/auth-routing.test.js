@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { protectedRoute } from '../apps/web/src/auth-routing.js'
+import { protectedRoute } from '../apps/web/src/auth-routing.ts'
 
 test('only the login route is available without a session', () => {
   for (const hash of ['#/workspaces','#/servers','#/projects','#/containers','#/images','#/tokens','#/tokens/new','#/manage/workspaces/new','#/manage/projects/id/edit','#/unknown']) {

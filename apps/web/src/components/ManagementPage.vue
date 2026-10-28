@@ -1,14 +1,32 @@
-<script setup>
+<script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { management, inventoryPage, inventoryScope } from '../api'
 import { t } from '../i18n'
+interface ManagementForm {
+  email?: string
+  password?: string
+  login?: string
+  provider?: string
+  workspace?: string
+  server?: string
+  project?: string
+  name?: string
+  type?: string
+  product?: string
+  ip?: string
+  status?: string
+  path?: string
+  image?: string
+  sort_order?: number
+  inventory_known?: boolean
+}
 const props = defineProps({route:Object, canEdit:Boolean, authenticated:Boolean})
 const emit = defineEmits(['back','saved','signed-in'])
 const q = useQuasar()
 const ready = ref(false)
-const loading = ref(false), busy = ref(false), error = ref(''), fieldErrors = ref({}), form = ref({}), record = ref(null)
-const workspaces = ref([]), servers = ref([]), projects = ref([]), descendants = ref({})
+const loading = ref(false), busy = ref(false), error = ref(''), fieldErrors = ref<Record<string,string>>({}), form = ref<ManagementForm>({}), record = ref(null)
+const workspaces = ref([]), servers = ref([]), projects = ref([]), descendants = ref<Record<string,number>>({})
 const resourceLabel = computed(() => ({workspaces:'Workspace',servers:'Server',projects:'Project',containers:'Container'})[props.route.resource])
 const login = computed(() => props.route.view === 'login')
 const deleting = computed(() => props.route.action === 'delete')
@@ -18,7 +36,7 @@ const serverOptions = computed(() => servers.value.filter(s=>s.type==='VPS' || s
 const projectOptions = computed(() => projects.value.map(p=>({label:`${p.name} / ${p.server?.name || ''}`,value:p.id})))
 const required = value => !!String(value ?? '').trim() || t('Required field')
 function failure(e) {
-  fieldErrors.value = Object.fromEntries(Object.entries(e.response?.data || {}).map(([key,value])=>[key,value.message]))
+  fieldErrors.value = Object.fromEntries(Object.entries((e.response?.data || {}) as Record<string,{message:string}>).map(([key,value])=>[key,value.message]))
   error.value = e.status === 401 || e.status === 403 ? t('Your session expired or you do not have permission. Sign in again.') : Object.keys(fieldErrors.value).length ? t('Review the highlighted fields.') : t('Unable to complete this action. Check your connection and permissions, then try again.')
 }
 async function load() {

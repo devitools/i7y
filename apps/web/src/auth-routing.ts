@@ -1,4 +1,4 @@
-export function protectedRoute(hash, authenticated) {
+export function protectedRoute(hash: unknown, authenticated: boolean) {
   const target = typeof hash === 'string' && hash.startsWith('#/') ? hash : '#/workspaces'
   if (/^#\/invite\/i7yi_[A-Za-z0-9]{64}$/.test(target)) return {hash:target}
   if (!authenticated) return target === '#/login' ? {hash:target} : {hash:'#/login',returnTo:target}

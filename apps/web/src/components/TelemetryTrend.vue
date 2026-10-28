@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import { computed, ref } from 'vue'
 import { metricSeries, plotSeries } from '../telemetry-summary'
 import { t, locale } from '../i18n'

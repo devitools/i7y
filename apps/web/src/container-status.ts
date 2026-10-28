@@ -9,6 +9,6 @@ export const containerStatusOptions = [
   {value:'missing',label:'Removed'},
   {value:'unknown',label:'Unknown'}
 ]
-export function normalizeStatuses(values) {
+export function normalizeStatuses(values: string[]): string[] {
   return [...new Set(values.filter(value=>containerStatusOptions.some(option=>option.value===value)))]
 }

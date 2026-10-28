@@ -1,7 +1,7 @@
-<script setup>
+<script setup lang="ts">
 import { ref, watch } from 'vue'
 import { inventoryPage, management } from '../api'
-import { deleteContainers } from '../bulk-delete.js'
+import { deleteContainers } from '../bulk-delete.ts'
 import { t } from '../i18n'
 const props=defineProps({route:Object,canEdit:Boolean})
 const emit=defineEmits(['back','saved'])

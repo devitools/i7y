@@ -1,9 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { guideBlocks, guideText } from '../apps/web/src/agent-guide.js'
-import { readRoute, routeHash } from '../apps/web/src/routes.js'
-import { protectedRoute } from '../apps/web/src/auth-routing.js'
+import { guideBlocks, guideText } from '../apps/web/src/agent-guide.ts'
+import { readRoute, routeHash } from '../apps/web/src/routes.ts'
+import { protectedRoute } from '../apps/web/src/auth-routing.ts'
 
 test('installation guide preserves shell commands and troubleshooting tables',()=>{
  const source=readFileSync(new URL('../docs/install-agent.pt-BR.md',import.meta.url),'utf8')

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import PocketBase from 'pocketbase'
-import { inventoryQuery } from '../apps/web/src/inventory-query.js'
+import { inventoryQuery } from '../apps/web/src/inventory-query.ts'
 const pb=new PocketBase(process.env.I7Y_TEST_URL)
 await pb.collection('users').authWithPassword(process.env.I7Y_TEST_EMAIL,process.env.I7Y_TEST_PASSWORD)
 const organizations=await pb.send('/api/i7y/organizations',{method:'GET'})

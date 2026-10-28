@@ -1,8 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createOrganizationTransport } from '../apps/web/src/organization-context.js'
-import { readRoute, routeHash } from '../apps/web/src/routes.js'
-import { protectedRoute } from '../apps/web/src/auth-routing.js'
+import { createOrganizationTransport } from '../apps/web/src/organization-context.ts'
+import { readRoute, routeHash } from '../apps/web/src/routes.ts'
+import { protectedRoute } from '../apps/web/src/auth-routing.ts'
 
 test('switching organizations rejects a pending response and sends the new context', async()=>{
   let org='first',resolve

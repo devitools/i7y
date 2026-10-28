@@ -1,12 +1,22 @@
-export function createQueryCache({ttl=30000,maxEntries=200,now=()=>Date.now()}={}) {
-  const entries = new Map()
+interface CacheOptions {
+  ttl?: number
+  maxEntries?: number
+  now?: () => number
+}
+interface CacheEntry<T> {
+  pending: boolean
+  expires: number
+  promise?: Promise<T>
+}
+export function createQueryCache({ttl=30000,maxEntries=200,now=()=>Date.now()}: CacheOptions={}) {
+  const entries = new Map<string, CacheEntry<unknown>>()
   let generation = 0
   return {
-    get(key, fetcher, {force=false}={}) {
+    get<T>(key: string, fetcher: () => T | PromiseLike<T>, {force=false}={}): Promise<T> {
       const entry=entries.get(key)
-      if (!force && entry && (entry.pending || entry.expires>now())) return entry.promise
+      if (!force && entry && (entry.pending || entry.expires>now())) return entry.promise as Promise<T>
       const version=generation
-      const next={pending:true,expires:0}
+      const next: CacheEntry<T>={pending:true,expires:0}
       next.promise=Promise.resolve().then(fetcher).then(value=>{
         if (generation===version && entries.get(key)===next) {next.pending=false;next.expires=now()+ttl}
         return value

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createQueryCache } from '../apps/web/src/query-cache.js'
+import { createQueryCache } from '../apps/web/src/query-cache.ts'
 
 test('cache coalesces requests, separates pages and expires after its TTL', async () => {
   let now=0,calls=0

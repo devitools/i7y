@@ -3,7 +3,7 @@ WORKDIR /app
 COPY package*.json ./
 COPY apps/web/package.json ./apps/web/package.json
 RUN npm ci
-COPY apps/web/index.html apps/web/vite.config.js ./apps/web/
+COPY apps/web/index.html apps/web/vite.config.ts apps/web/tsconfig.json ./apps/web/
 COPY apps/web/src ./apps/web/src
 COPY docs/install-agent.*.md ./docs/
 RUN npm run build

@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { tokenApi, activeOrganization, organizationChoices, globalAdmin } from '../api'
@@ -11,10 +11,10 @@ const canWrite = computed(()=>globalAdmin.value || ['admin','editor'].includes(o
 const scopeOptions=computed(()=>[{label:t('Read only'),value:'read'},...(canWrite.value?[{label:t('Read and write'),value:'write'}]:[])])
 const selected = computed(()=>tokens.value.find(token=>token.id===props.route.id))
 const columns = computed(()=>[
-  {name:'label',label:t('Name'),field:'label',align:'left'},
-  {name:'prefix',label:t('Token prefix'),field:'prefix',align:'left'},
-  {name:'scope',label:t('Permission'),field:row=>t(row.scope==='read'?'Read only':'Read and write'),align:'left'},
-  {name:'expires',label:t('Expires'),field:row=>new Date(row.expires_at.replace(' ','T')).toLocaleString(locale.value),align:'left'},
+  {name:'label',label:t('Name'),field:'label',align:'left' as const},
+  {name:'prefix',label:t('Token prefix'),field:'prefix',align:'left' as const},
+  {name:'scope',label:t('Permission'),field:row=>t(row.scope==='read'?'Read only':'Read and write'),align:'left' as const},
+  {name:'expires',label:t('Expires'),field:row=>new Date(row.expires_at.replace(' ','T')).toLocaleString(locale.value),align:'left' as const},
   {name:'action',label:'',field:'id'},
 ])
 const expired = token => Date.parse(token.expires_at.replace(' ','T')) <= Date.now()

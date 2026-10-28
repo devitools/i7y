@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import {t} from '../i18n'
 import {metricLimits,metricLevels} from '../metric-scale'
 </script>

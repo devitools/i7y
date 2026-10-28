@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { flatten, hasInventory, matches } from '../apps/web/src/inventory.js'
+import { flatten, hasInventory, matches } from '../apps/web/src/inventory.ts'
 const workspaces = [{login:'team@example.com',services:[{type:'VPS',ip:'192.0.2.10',name:'example',projects:[{name:'example',path:'/projects/example',containers:[{name:'example-web',image:'nginx:stable'},{name:'example-db',image:'mysql:5.7'}]}]}]}]
 test('preserva a ligação entre conta, servidor, projeto e contêiner', () => {
   const data = flatten(workspaces)

@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import { computed, defineAsyncComponent, onMounted, onUnmounted, ref } from 'vue'
 import { watch } from 'vue'
 import en from 'quasar/lang/en-US'
@@ -18,10 +18,10 @@ import BulkDeletePage from './components/BulkDeletePage.vue'
 import ManagementPage from './components/ManagementPage.vue'
 import RecordDetailDialog from './components/RecordDetailDialog.vue'
 import { useQuasar } from 'quasar'
-import { protectedRoute } from './auth-routing.js'
+import { protectedRoute } from './auth-routing.ts'
 import { readRoute, routeHash, managementHash, bulkDeleteHash } from './routes'
 import { inventoryPage, inventoryScope, inventoryProjectOptions, inventoryServerStats, inventoryOperatingSystems, invalidateInventory, management, authStore, activeOrganization, organizationChoices, globalAdmin, loadOrganizations, setOrganization } from './api'
-import { containerStatusOptions } from './container-status.js'
+import { containerStatusOptions } from './container-status.ts'
 import { matches, hasInventory } from './inventory'
 const q = useQuasar()
 const currentRoute = ref(readRoute(window.location.hash))
@@ -226,12 +226,12 @@ async function imageLookup(value,done) {
   try {const result=await inventoryPage('images',{search:value,workspace:account.value,perPage:50,sortBy:'name'});done(()=>imageChoices.value=result.items)} catch {done(()=>imageChoices.value=[])}
 }
 const columns = computed(() => {
-  if (view.value==='imageCatalog') return [{name:'name',label:t('Image'),field:'name',align:'left',sortable:true},{name:'containers',label:t('Containers'),field:'count',align:'left',sortable:true},{name:'action',label:'',field:'key'}]
-  if (view.value==='accounts') return [{name:'name',label:t('Workspace'),field:'login',align:'left',sortable:true},{name:'provider',label:t('Provider'),field:'provider',align:'left'},{name:'count',label:'VPS',field:'count',align:'left',sortable:true},{name:'containers',label:t('Containers'),field:'containers',align:'left',sortable:true},{name:'action',label:'',field:'key'}]
-  if (view.value==='projects') return [{name:'name',label:t('Project / directory'),field:'name',align:'left',sortable:true},{name:'server',label:t('Server'),field:r=>r.server.name,align:'left',sortable:true},{name:'account',label:t('Workspace'),field:r=>r.server.account,align:'left'},{name:'containers',label:t('Containers'),field:'container_count',align:'left',sortable:true},{name:'action',label:'',field:'key'}]
-  if (view.value==='images') return [{name:'state',label:t('State'),field:'state',align:'left',sortable:true},{name:'name',label:t('Container'),field:'name',align:'left',sortable:true},{name:'project',label:t('Project / directory'),field:'project',align:'left',sortable:true},{name:'image',label:t('Image'),field:'image',align:'left',sortable:true},{name:'server',label:t('Server'),field:r=>r.server.name || r.server.ip,align:'left',sortable:true},{name:'ip',label:t('IP address'),field:r=>r.server.ip,align:'left',sortable:true},{name:'action',label:'',field:'key'}]
-  if (view.value==='containers') return [{name:'state',label:t('State'),field:'state',align:'left',sortable:true},{name:'name',label:t('Container'),field:'name',align:'left',sortable:true},{name:'project',label:t('Project'),field:'project',align:'left',sortable:true},{name:'image',label:t('Image'),field:'image',align:'left',sortable:true},{name:'server',label:t('Server'),field:r=>r.server.name,align:'left',sortable:true},{name:'ip',label:t('IP address'),field:r=>r.server.ip,align:'left',sortable:true},{name:'action',label:'',field:'key'}]
-  return [{name:'name',label:t('Server'),field:'name',align:'left',sortable:true},{name:'account',label:t('Workspace'),field:'account',align:'left',sortable:true},{name:'ip',label:t('IP address'),field:'ip',align:'left',sortable:true},{name:'status',label:t('Status'),field:'status',align:'left'},{name:'inventory',label:t('Containers'),field:'container_count',align:'left',sortable:true},{name:'action',label:'',field:'key'}]
+  if (view.value==='imageCatalog') return [{name:'name',label:t('Image'),field:'name',align:'left' as const,sortable:true},{name:'containers',label:t('Containers'),field:'count',align:'left' as const,sortable:true},{name:'action',label:'',field:'key'}]
+  if (view.value==='accounts') return [{name:'name',label:t('Workspace'),field:'login',align:'left' as const,sortable:true},{name:'provider',label:t('Provider'),field:'provider',align:'left' as const},{name:'count',label:'VPS',field:'count',align:'left' as const,sortable:true},{name:'containers',label:t('Containers'),field:'containers',align:'left' as const,sortable:true},{name:'action',label:'',field:'key'}]
+  if (view.value==='projects') return [{name:'name',label:t('Project / directory'),field:'name',align:'left' as const,sortable:true},{name:'server',label:t('Server'),field:r=>r.server.name,align:'left' as const,sortable:true},{name:'account',label:t('Workspace'),field:r=>r.server.account,align:'left' as const},{name:'containers',label:t('Containers'),field:'container_count',align:'left' as const,sortable:true},{name:'action',label:'',field:'key'}]
+  if (view.value==='images') return [{name:'state',label:t('State'),field:'state',align:'left' as const,sortable:true},{name:'name',label:t('Container'),field:'name',align:'left' as const,sortable:true},{name:'project',label:t('Project / directory'),field:'project',align:'left' as const,sortable:true},{name:'image',label:t('Image'),field:'image',align:'left' as const,sortable:true},{name:'server',label:t('Server'),field:r=>r.server.name || r.server.ip,align:'left' as const,sortable:true},{name:'ip',label:t('IP address'),field:r=>r.server.ip,align:'left' as const,sortable:true},{name:'action',label:'',field:'key'}]
+  if (view.value==='containers') return [{name:'state',label:t('State'),field:'state',align:'left' as const,sortable:true},{name:'name',label:t('Container'),field:'name',align:'left' as const,sortable:true},{name:'project',label:t('Project'),field:'project',align:'left' as const,sortable:true},{name:'image',label:t('Image'),field:'image',align:'left' as const,sortable:true},{name:'server',label:t('Server'),field:r=>r.server.name,align:'left' as const,sortable:true},{name:'ip',label:t('IP address'),field:r=>r.server.ip,align:'left' as const,sortable:true},{name:'action',label:'',field:'key'}]
+  return [{name:'name',label:t('Server'),field:'name',align:'left' as const,sortable:true},{name:'account',label:t('Workspace'),field:'account',align:'left' as const,sortable:true},{name:'ip',label:t('IP address'),field:'ip',align:'left' as const,sortable:true},{name:'status',label:t('Status'),field:'status',align:'left' as const},{name:'inventory',label:t('Containers'),field:'container_count',align:'left' as const,sortable:true},{name:'action',label:'',field:'key'}]
 })
 const detailProjects = ref([]), detailSearch = ref(''), detailPage=ref(1), detailTotal=ref(0), detailLoading=ref(false)
 const detailContainers=ref({}), detailContainerPages=ref({})

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { routeHash, readRoute } from '../apps/web/src/routes.js'
+import { routeHash, readRoute } from '../apps/web/src/routes.ts'
 
 test('nested inventory links preserve workspace, server and project identities', () => {
   const route = {view:'containers',workspace:'team@example.com',server:'team@example.com:192.0.2.10:5',project:'project / a?b&c#1'}

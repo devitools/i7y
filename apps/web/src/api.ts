@@ -1,10 +1,11 @@
+import type { RouteState } from './types'
 import PocketBase from 'pocketbase'
 import { ref } from 'vue'
-import { createOrganizationTransport } from './organization-context.js'
-import { telemetrySince, serverStats } from './telemetry-summary.js'
-import { createQueryCache } from './query-cache.js'
-import { inventoryQuery } from './inventory-query.js'
-import { createManagementApi } from './management.js'
+import { createOrganizationTransport } from './organization-context.ts'
+import { telemetrySince, serverStats } from './telemetry-summary.ts'
+import { createQueryCache } from './query-cache.ts'
+import { inventoryQuery } from './inventory-query.ts'
+import { createManagementApi } from './management.ts'
 const pb = new PocketBase(import.meta.env.VITE_POCKETBASE_URL || '/')
 export const authStore = pb.authStore
 export const activeOrganization = ref(null)
@@ -63,7 +64,7 @@ for (const method of ['create','update','remove']) management[method]=async(...a
   cache.clear()
   return result
 }
-export async function inventoryPage(resource, values={}, {force=false}={}) {
+export async function inventoryPage(resource, values: RouteState={}, {force=false}={}) {
   const query=inventoryQuery(pb,resource,values)
   const key=JSON.stringify([authStore.record?.id,activeOrganization.value,resource,query])
   return cache.get(key,async()=>{
@@ -71,12 +72,12 @@ export async function inventoryPage(resource, values={}, {force=false}={}) {
     return {...result,items:result.items.map(row=>typeof row.payload==='string'?JSON.parse(row.payload):row.payload)}
   },{force})
 }
-export async function inventoryProjectOptions(values={}) {
+export async function inventoryProjectOptions(values: RouteState={}) {
   const {search='',matchingSearch='',page=1,...scope}=values
   const query=inventoryQuery(pb,'containers',{...scope,search:matchingSearch,perPage:100})
   const key=JSON.stringify([authStore.record?.id,activeOrganization.value,'matching-projects',query.options])
   const ids=await cache.get(key,async()=>{
-    const ids=new Set()
+    const ids=new Set<string>()
     for(let page=1;;page++) {
       const result=await pb.collection('i7y_containers').getList(page,100,{...query.options,fields:'project_id',skipTotal:true})
       for(const row of result.items) if(row.project_id)ids.add(row.project_id)

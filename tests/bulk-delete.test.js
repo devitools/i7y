@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {deleteContainers} from '../apps/web/src/bulk-delete.js'
-import {bulkDeleteHash,readRoute,routeHash} from '../apps/web/src/routes.js'
+import {deleteContainers} from '../apps/web/src/bulk-delete.ts'
+import {bulkDeleteHash,readRoute,routeHash} from '../apps/web/src/routes.ts'
 
 test('bulk deletion tracks failures without retrying successful records',async()=>{
  const calls=[]

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createManagementApi } from '../apps/web/src/management.js'
+import { createManagementApi } from '../apps/web/src/management.ts'
 
 test('management forwards CRUD and authentication through the same client', async () => {
   const calls = []

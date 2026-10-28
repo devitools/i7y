@@ -1,6 +1,7 @@
-import { normalizeStatuses } from './container-status.js'
+import type { ListState, RouteState } from './types'
+import { normalizeStatuses } from './container-status.ts'
 const views = { telemetry: 'telemetry', workspaces: 'accounts', servers: 'servers', projects: 'projects', containers: 'containers', images: 'images' }
-export function readRoute(hash) {
+export function readRoute(hash: string): RouteState {
   const [path, query = ''] = hash.replace(/^#\/?/, '').split('?')
   const params = new URLSearchParams(query)
   const parts = path.split('/')
@@ -27,7 +28,7 @@ export function readRoute(hash) {
   if(path==='containers' && !params.has('order') && state.sortBy==='project') {state.sortBy='server';state.descending=false}
   return { view: path === 'images' && !params.get('image') ? 'imageCatalog' : views[path] || 'accounts', workspace: params.get('workspace'), server: params.get('server'), project: params.getAll('project').length>1?params.getAll('project'):params.get('project'), ...(params.has('image') ? { image: params.getAll('image').length>1 ? params.getAll('image') : params.get('image') } : {}), ...state }
 }
-export function routeHash({ view, workspace, server, project, image, statuses, ...state }) {
+export function routeHash({ view, workspace, server, project, image, statuses, ...state }: RouteState) {
   if(view==='organizations')return '#/organizations'
   const path = view === 'imageCatalog' ? 'images' : Object.keys(views).find(key => views[key] === view) || 'workspaces'
   const params = new URLSearchParams()
@@ -36,7 +37,7 @@ export function routeHash({ view, workspace, server, project, image, statuses, .
   if (server) params.set('server', server)
   for(const value of [...new Set(Array.isArray(project)?project:[project])]) if(value)params.append('project',value)
   for(const value of [...new Set(Array.isArray(image)?image:[image])]) if(value) params.append('image',value)
-  for (const [key,value] of Object.entries(readListState(new URLSearchParams(Object.entries(state).filter(([,value])=>value!==null && value!==undefined && value!==''))))) params.set(key==='sortBy'?'order':key,String(value))
+  for (const [key,value] of Object.entries(readListState(new URLSearchParams(Object.entries(state).filter(([,value])=>value!==null && value!==undefined && value!=='').map(([key,value])=>[key,String(value)]))))) params.set(key==='sortBy'?'order':key,String(value))
   return `#/${path}${params.size ? `?${params}` : ''}`
 }
 
@@ -51,8 +52,8 @@ export function managementHash(resource, action = 'new', id = null, parent = nul
 export function inventoryReturn(hash) {
   return typeof hash==='string' && /^#\/(workspaces|servers|projects|containers|images)(\?|$)/.test(hash) ? hash : null
 }
-function readListState(params) {
-  const state={}
+function readListState(params: URLSearchParams): ListState {
+  const state: ListState={}
   if(params.get('operatingSystem') && !['null','undefined'].includes(params.get('operatingSystem'))) state.operatingSystem=params.get('operatingSystem')
   if(params.get('search') && !['null','undefined'].includes(params.get('search'))) state.search=params.get('search')
   if(['all','docker','pending','credential'].includes(params.get('coverage'))) state.coverage=params.get('coverage')
@@ -64,7 +65,7 @@ function readListState(params) {
   return state
 }
 
-export function bulkDeleteHash(ids,returnTo) {
+export function bulkDeleteHash(ids: string[],returnTo: string) {
   const params=new URLSearchParams()
   for(const id of [...new Set(ids)].slice(0,100)) if(/^[a-z0-9]{15}$/.test(id))params.append('id',id)
   if(inventoryReturn(returnTo))params.set('returnTo',returnTo)

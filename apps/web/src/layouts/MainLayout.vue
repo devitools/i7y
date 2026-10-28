@@ -65,12 +65,13 @@
   </q-layout>
 </template>
 
-<script setup>
+<script setup lang="ts">
+import type { NavigationItem, WorkspaceChoice } from '../types'
 import { computed, ref } from 'vue'
 import { useQuasar } from 'quasar'
 import { dark } from '../theme'
 import { locale, t, languageOptions } from '../i18n'
-const props = defineProps({ nav:Array, activeView:String, activeWorkspace:String, workspaces:Array, loading:Boolean, error:String, moreWorkspaces:Boolean })
+const props = defineProps<{nav?: NavigationItem[]; activeView?: string; activeWorkspace?: string; workspaces?: WorkspaceChoice[]; loading?: boolean; error?: string; moreWorkspaces?: boolean}>()
 const emit = defineEmits(['navigate','workspace','more-workspaces'])
 const onlyWithServers = defineModel('onlyWithServers')
 const leftDrawerOpen = ref(true)

@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import PocketBase from 'pocketbase'
-import { inventoryQuery } from '../apps/web/src/inventory-query.js'
+import { inventoryQuery } from '../apps/web/src/inventory-query.ts'
 const client=new PocketBase('http://localhost')
 
 test('pagination, sorting, scope and search are delegated to the API', () => {

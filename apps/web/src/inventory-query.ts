@@ -1,6 +1,8 @@
-import { normalizeStatuses } from './container-status.js'
+import type PocketBase from 'pocketbase'
+import type { RouteState } from './types'
+import { normalizeStatuses } from './container-status.ts'
 const resources = new Set(['workspaces','servers','projects','containers','images'])
-export function inventoryQuery(client, resource, options={}) {
+export function inventoryQuery(client: PocketBase, resource: string, options: RouteState={}) {
   if (!resources.has(resource)) throw new TypeError('Invalid inventory resource')
   const {page=1,perPage=10,search='',workspace=null,server=null,project=null,image=null,statuses=null,includeRemoved=false,coverage='all',serverType=null,operatingSystem=null,onlyWithServers=false,sortBy=null,descending=false,id=null,ids=null,legacyOrder=null}=options
   const filters=[]

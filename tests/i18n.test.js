@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { messages } from '../apps/web/src/messages.js'
+import { messages } from '../apps/web/src/messages.ts'
 
 test('all interface messages exist in both languages and use workspace terminology', () => {
   const source = ['App.vue','layouts/MainLayout.vue','components/ManagementPage.vue','components/ApiTokensPage.vue','components/TelemetryPage.vue','components/TelemetryTrend.vue','components/AgentInstallPage.vue','components/OrganizationsPage.vue','components/InvitationPage.vue'].map(path => readFileSync(new URL(`../apps/web/src/${path}`, import.meta.url), 'utf8')).join('\n')

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {telemetrySince,timestamp,memoryPercent,diskPercent,containerSummary,metricSeries,plotSeries} from '../apps/web/src/telemetry-summary.js'
+import {telemetrySince,timestamp,memoryPercent,diskPercent,containerSummary,metricSeries,plotSeries} from '../apps/web/src/telemetry-summary.ts'
 test('timestamps use UTC and missing metrics remain unknown',()=>{
  assert.equal(timestamp('2026-10-23 12:00:00.000Z'),Date.parse('2026-10-23T12:00:00Z'))
  assert.equal(timestamp('2026-10-23 12:00:00'),Date.parse('2026-10-23T12:00:00Z'))
@@ -29,7 +29,7 @@ test('history filters use the PocketBase UTC date format',()=>{
 })
 
 test('server list stats reuse health rules and mark stale samples',async()=>{
- const {serverStats}=await import('../apps/web/src/telemetry-summary.js')
+ const {serverStats}=await import('../apps/web/src/telemetry-summary.ts')
  const now=Date.parse('2026-10-27T12:00:00Z')
  const stats=serverStats({observed_at:'2026-10-27 11:00:00Z',host:{cpu_percent:2,memory_total_bytes:100,memory_available_bytes:60,disks:[{total_bytes:100,available_bytes:80},{total_bytes:100,available_bytes:10}]}},[{telemetry:{state:'running'}},{telemetry:{state:'running',health:'unhealthy'}}],now)
  assert.equal(stats.cpu,2);assert.equal(stats.memory,40);assert.equal(stats.disk,90)
@@ -39,7 +39,7 @@ test('server list stats reuse health rules and mark stale samples',async()=>{
 })
 
 test('server stats expose collected OS details and support older agents',async()=>{
- const {serverStats}=await import('../apps/web/src/telemetry-summary.js')
+ const {serverStats}=await import('../apps/web/src/telemetry-summary.ts')
  const stats=serverStats({host:{operating_system:{pretty_name:'Ubuntu 24.04.3 LTS',architecture:'amd64',kernel:'6.8.0'}}},[])
  assert.equal(stats.operatingSystem,'Ubuntu 24.04.3 LTS')
  assert.equal(stats.operatingSystemDetails,'Ubuntu 24.04.3 LTS · amd64 · 6.8.0')
