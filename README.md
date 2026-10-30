@@ -1,87 +1,192 @@
+<div align="center">
+
 # i7y
 
-Authenticated infrastructure inventory and telemetry, built with Vue, Quasar, PocketBase and a Go collector.
+### Know your infrastructure. See what changes. Stay in control.
 
-## Repository
+**Infrastructure inventory, real-time Docker awareness, telemetry, and incident management — in one workspace.**
 
-- `apps/web`: Vue/Quasar interface, built with Vite.
-- `apps/backend`: PocketBase hooks and database migrations.
-- `apps/agent`: Linux and Windows telemetry collectors.
-- `apps/desktop`: Tauri/Rust native shell sharing the web interface.
-- `apps/automation`: reserved for SSH-controlled automation.
-- `deploy`: deployment templates for the product.
-- `docs`: API and installation documentation.
-- `scripts`: generic repository utilities.
-- `tests`: cross-application and frontend tests.
+[Website](https://i7y.devi.tools) · [Getting started](#-quick-start) · [Documentation](#-documentation) · [Report an issue](https://github.com/devitools/i7y/issues)
 
-## Development
+![Vue](https://img.shields.io/badge/Vue-42b883?style=flat-square&logo=vuedotjs&logoColor=white)
+![Quasar](https://img.shields.io/badge/Quasar-1976d2?style=flat-square&logo=quasar&logoColor=white)
+![PocketBase](https://img.shields.io/badge/PocketBase-b8dbe4?style=flat-square)
+![Go](https://img.shields.io/badge/Go-00add8?style=flat-square&logo=go&logoColor=white)
+![Tauri](https://img.shields.io/badge/Tauri-24c8db?style=flat-square&logo=tauri&logoColor=white)
 
-Install [Volta](https://volta.sh) and Docker Compose. Node and npm versions are pinned in the root `package.json`; Volta selects them automatically when you run commands in this repository.
+</div>
 
-```sh
+---
+
+## What is i7y?
+
+**i7y** brings scattered infrastructure information into one place. Keep track of servers, projects, containers, and the images they run; observe host and Docker telemetry; and act on incidents with context instead of jumping between terminals and dashboards.
+
+Designed around a self-hosted backend, i7y combines a browser-based management interface, a lightweight Go collector, and a native desktop application. Its direction is simple: **from infrastructure visibility to carefully controlled operations.**
+
+> **Project status:** i7y is under active development. Inventory, collection, alerting, and the core web/desktop experience are implemented in the repository. Remote desktop operations are being developed with explicit authorization and review gates; do not assume they are production-ready.
+
+## ✨ Highlights
+
+| | Capability | What it does |
+| :-- | :-- | :-- |
+| 🗂️ | **Infrastructure inventory** | Organize servers, projects, containers, Docker images, and repository metadata. |
+| 📡 | **Automatic discovery** | Reconcile Docker container changes and discover project paths through the Go agent. |
+| 📊 | **Host & container telemetry** | Collect resource metrics, Docker state, and historical observations. |
+| 🚨 | **Alerts & incidents** | Define threshold rules, track incidents, acknowledge ownership, and review events. |
+| 👥 | **Organizations & access** | Separate inventory contexts with organization membership and roles. |
+| 🖥️ | **Web & desktop** | Use the Vue/Quasar interface in a browser or the Tauri desktop shell. |
+| 🔐 | **Security-conscious design** | Scoped agent credentials, authenticated APIs, and reviewed desktop automation boundaries. |
+
+### How it fits together
+
+```mermaid
+flowchart LR
+    subgraph Servers[Managed infrastructure]
+      Docker[Docker & host metrics]
+      Agent[Go collector]
+      Docker --> Agent
+    end
+    Agent -->|Authenticated snapshots| API[PocketBase + i7y hooks]
+    API --> Data[(Inventory & telemetry)]
+    API --> Alerts[Rules & incidents]
+    Web[Web app · Vue / Quasar] <-->|Authenticated API| API
+    Desktop[Desktop · Tauri / Rust] <-->|Authenticated API| API
+    Desktop -.->|Reviewed operations · evolving| Controller[Automation host]
+```
+
+The collector observes and reports; **it does not deploy Compose files or modify application containers**. Remote operations follow a separate architecture and authorization process.
+
+## 🚀 Quick start
+
+### Prerequisites
+
+- [Volta](https://volta.sh/) (the repository pins **Node 22.23.4** and **npm 10.9.9**)
+- Docker with Docker Compose
+
+### Run locally
+
+```bash
+git clone https://github.com/devitools/i7y.git
+cd i7y
 npm ci
 docker compose up -d
 npm run dev
 ```
 
-Compose starts **only PocketBase**, available at `http://127.0.0.1:8097`. It mounts the backend hooks and migrations read-only, watches hooks for local development and keeps the database and cached PocketBase binary in named volumes. First startup downloads and verifies PocketBase 0.40.4. Subsequent startups reuse the cached binary. No frontend, Node installation or application image build runs in Compose.
+Open **http://127.0.0.1:5177** to access the web app.
 
-Vite runs directly on the host at `http://127.0.0.1:5177`, with hot reload and an API proxy to PocketBase. Open this URL to use the frontend. PocketBase's loopback port also exposes its administrative UI for trusted local setup. The web workspace uses the same Volta versions as the root.
+| Service | Local address | Notes |
+| --- | --- | --- |
+| Web app (Vite) | `http://127.0.0.1:5177` | Hot reload; proxies API requests to PocketBase. |
+| PocketBase | `http://127.0.0.1:8097` | Local backend and trusted administrative setup. |
 
-```sh
-npm test
-npm run typecheck
-npm run build:web
-npm run backend:logs
-npm run backend:down
+Docker Compose starts **only the backend**. The frontend runs locally through Vite. The first backend startup downloads and verifies the pinned PocketBase binary; subsequent runs reuse its cached copy.
+
+A fresh installation contains no infrastructure inventory. For first-user setup, see [Authentication & API access](docs/api-auth.md).
+
+### Useful commands
+
+```bash
+npm test                # Run repository tests
+npm run typecheck       # Check web and desktop types
+npm run build:web       # Build the web frontend
+npm run backend:logs    # Follow PocketBase logs
+npm run backend:down    # Stop the local backend
 ```
 
-`npm start` and `npm stop` are aliases for starting and stopping the local backend. `docker compose down` preserves data; do not add `--volumes` unless you intend to delete the local database.
+`npm start` and `npm stop` are shortcuts for backend startup and shutdown. `docker compose down` keeps the database volume; adding `--volumes` deletes persisted local data.
 
-The frontend uses TypeScript, including Vue script blocks and Vite configuration. Every web build runs vue-tsc first. Tests remain JavaScript and use tsx to import TypeScript modules. PocketBase hooks and migrations remain JavaScript. Type checking preserves existing dynamic API boundaries; strict mode is not enabled yet.
+## 🧩 Components
 
-The web workspace owns frontend dependencies; the root npm workspace owns the shared lockfile. Go and Rust keep their own toolchains. A new database starts without infrastructure inventory. See [authentication](docs/api-auth.md) to create the first user through trusted local administration. Existing database contents are preserved.
+| Location | Responsibility | Stack |
+| --- | --- | --- |
+| [`apps/web`](apps/web) | Management UI | Vue, Quasar, Vite, TypeScript |
+| [`apps/backend`](apps/backend) | API, auth, rules, schema, migrations | PocketBase, JavaScript hooks |
+| [`apps/agent`](apps/agent) | Host and Docker observation | Go |
+| [`apps/desktop`](apps/desktop) | Native client and local controller integration | Tauri, Rust |
+| [`apps/mobile`](apps/mobile) | Mobile client | See mobile documentation |
+| [`apps/push-gateway`](apps/push-gateway) | Push-delivery infrastructure | See mobile API documentation |
+| [`apps/automation`](apps/automation) | Reviewed remote operations architecture | Rust / controller |
+| [`apps/site`](apps/site) | Product website | Website sources |
+| [`packages/theme`](packages/theme) | Shared design assets | Shared package |
 
-`VITE_POCKETBASE_URL` configures the frontend API endpoint at build time and defaults to the same origin. The development proxy targets port 8097. If you override `INVENTORY_PORT`, also configure `VITE_POCKETBASE_URL` for that backend. The optional backend `INVENTORY_FILE` enables an explicitly mounted private legacy import; normal operation does not require it.
+## 📡 Collect telemetry
 
-## Desktop development
+The Go agent observes Linux hosts and Docker. It sends a complete snapshot on startup and every **five minutes**, and also follows Docker lifecycle and health events for faster reconciliation.
 
-See [desktop setup](apps/desktop/README.md) for Rust/platform prerequisites and backend configuration. Run the app and enter the URL of your i7y installation on its sign-in screen:
+Build and test it:
 
-```sh
-npm run desktop:dev
-```
-
-The desktop reuses the same frontend through a separate Vite server on port 5178. It does not start or deploy a backend. Native SSH and 1Password operations are not implemented yet.
-
-## Production image
-
-The single root `Dockerfile` builds the frontend in a Node stage, then copies static assets, hooks and migrations into a PocketBase runtime image. Node and npm are not included in the runtime. PocketBase is downloaded and checksum-verified during the image build, with amd64 and arm64 support; startup requires no downloads.
-
-```sh
-docker build -t i7y:VERSION .
-```
-
-A single `.dockerignore` allowlists required sources and excludes `.local/`, dependencies, generated builds and private files. A prior host frontend build is not required.
-
-Configure `I7Y_DOMAIN` and `I7Y_VERSION` for `deploy/compose.production.yaml`. This production template uses the built image and an external reverse proxy; it is separate from the local development Compose. Its `data` bind mount is relative to the Compose file, so preserve the existing deployment's data mount when upgrading. Building an image does not deploy it.
-
-## Collector
-
-```sh
+```bash
 cd apps/agent
-go test ./...
+go test -race ./...
 ./build.sh
 ```
 
-See [container API](docs/containers-api.md), [telemetry](docs/telemetry.md) and [agent installation](docs/install-agent.en.md).
+The build generates Linux `amd64` and `arm64` binaries and checksums. Before deploying an agent, register the target server and create its scoped credential in **Telemetry**. Protect the agent's Docker socket access and its configuration file.
 
-## Local-only material
+Read the step-by-step [agent installation guide](docs/install-agent.en.md) and [telemetry reference](docs/telemetry.md) before using it on a server.
 
-Keep credentials, actual inventory, migration rehearsals, deployment records, backups and installation-specific scripts under `.local/`. This directory is ignored by Git and excluded from Docker build contexts. Do not place private material in source, fixtures or documentation. No local-only files are required to build the product.
+## 🖥️ Native desktop
 
-See [third-party notices](THIRD_PARTY.md).
+The Tauri desktop application shares the web UI while using a native Rust layer for supported operations. It connects to an existing i7y installation; **it does not start a backend**.
 
-## Project language
+```bash
+npm run desktop:dev
+```
 
-Write source code, identifiers, errors, comments, test descriptions, examples and canonical documentation in English. Keep localized interface text and translated guides under `apps/web/src/locales/<locale>/`. English is the canonical language; localized catalogs must retain the same English keys. Historical installation material under ignored `.local/` is not part of the distributed project.
+On first launch, enter your installation URL and sign in through the browser-based authentication flow. Remote production instances require HTTPS with a trusted certificate.
+
+For platform prerequisites and build instructions, see [Desktop setup](apps/desktop/README.md). SSH diagnostics and the controller architecture are described in [Desktop operations](docs/desktop-operations.md) and [Desktop MCP](docs/desktop-mcp.md). **Remote server mutations are subject to additional security and pilot requirements.**
+
+## 📦 Production deployment
+
+Build the container image:
+
+```bash
+docker build -t i7y:VERSION .
+```
+
+The production image packages the built frontend with the PocketBase runtime and backend hooks. The deployment template is at [`deploy/compose.production.yaml`](deploy/compose.production.yaml) and expects `I7Y_DOMAIN`, `I7Y_VERSION`, and an external reverse proxy.
+
+**Back up and preserve your deployment's persistent data mount when upgrading.** Building an image does not deploy it.
+
+## 📚 Documentation
+
+| Topic | Guide |
+| --- | --- |
+| Authentication and scoped access | [API authentication](docs/api-auth.md) |
+| Organizations and roles | [Organizations](docs/organizations.md) |
+| Telemetry protocol and behavior | [Telemetry](docs/telemetry.md) |
+| Installing collectors | [Agent installation](docs/install-agent.en.md) |
+| Alerts, rules, and incidents | [Alerts & incidents](docs/alerts.md) |
+| Containers API | [Containers API](docs/containers-api.md) |
+| Repository metadata | [Project repositories](docs/project-repositories.md) |
+| Desktop configuration | [Desktop setup](apps/desktop/README.md) |
+| Desktop operation boundaries | [Desktop operations](docs/desktop-operations.md) |
+| Mobile architecture | [Mobile API](docs/mobile-api.md) |
+| Third-party notices | [Third-party notices](THIRD_PARTY.md) |
+
+## 🤝 Contributing
+
+Issues and focused pull requests are welcome. Before proposing changes, run the available checks and follow the repository conventions:
+
+```bash
+npm test
+npm run typecheck
+npm run build:web
+```
+
+Keep source code, identifiers, errors, test descriptions, and canonical documentation **in English**. Interface translations belong in `apps/web/src/locales/<locale>/`. Never commit credentials, real inventories, backups, or installation-specific data; keep these in the Git-ignored `.local/` directory.
+
+For defects and proposals, [open an issue](https://github.com/devitools/i7y/issues).
+
+---
+
+<div align="center">
+
+**Visibility first. Controlled operations next.**
+
+Made by [DeviTools](https://github.com/devitools) · [i7y website](https://i7y.devi.tools)
+
+</div>
