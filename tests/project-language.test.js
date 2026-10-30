@@ -5,8 +5,8 @@ import { extname, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
-const extensions = new Set(['.ts', '.js', '.vue', '.go', '.py', '.md', '.json', '.sh', '.yaml', '.ps1', '.css', '.scss', '.html'])
-const ignored = new Set(['node_modules', 'dist', 'target', '__pycache__', 'locales'])
+const extensions = new Set(['.ts', '.js', '.vue', '.go', '.py', '.md', '.json', '.sh', '.yaml', '.ps1', '.css', '.scss', '.html', '.rs', '.toml'])
+const ignored = new Set(['node_modules', 'dist', 'dist-desktop', 'target', '__pycache__', 'locales'])
 function sourceFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
     if (ignored.has(entry.name)) return []

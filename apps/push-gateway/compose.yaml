@@ -1,0 +1,18 @@
+services:
+  gateway:
+    build: .
+    env_file: .env
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - gateway-data:/data
+      - ${GATEWAY_SECRETS_DIRECTORY:?Set GATEWAY_SECRETS_DIRECTORY}:/run/secrets:ro
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 20s
+volumes:
+  gateway-data:

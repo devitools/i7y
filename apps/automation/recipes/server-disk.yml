@@ -1,0 +1,21 @@
+---
+- name: Inspect server disk usage
+  hosts: all
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Read mounted filesystem usage
+      ansible.builtin.command:
+        argv: [df, -P, -k, -x, tmpfs, -x, devtmpfs, -x, overlay]
+      register: i7y_disk
+      changed_when: false
+    - name: Return disk usage
+      ansible.builtin.debug:
+        msg: '{{ i7y_disk.stdout_lines }}'
+    - name: Persist bounded inspection evidence on the controller
+      ansible.builtin.copy:
+        dest: '{{ i7y_result_output }}'
+        mode: '0600'
+        content: '{{ {"disks": i7y_disk.stdout_lines} | to_json }}'
+      delegate_to: localhost
+      when: i7y_result_output is defined

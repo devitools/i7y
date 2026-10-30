@@ -1,0 +1,16 @@
+{
+  "expo": {
+    "extra": {
+      "pushGatewayUrl": "",
+      "pushEnvironment": "sandbox",
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
+      "eas": {
+        "projectId": "1347e956-5177-4fc2-9138-d81f8fc5c109"
+      }
+    }
+  }
+}

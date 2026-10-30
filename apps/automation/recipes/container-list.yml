@@ -1,0 +1,28 @@
+---
+- name: Inspect container state
+  hosts: all
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Read container summary without environment variables
+      ansible.builtin.command:
+        argv:
+          - docker
+          - ps
+          - --all
+          - --no-trunc
+          - --format
+          - >-
+              {{ '{"ID":{{json .ID}},"Names":{{json .Names}},"Image":{{json .Image}},"State":{{json .State}},"Status":{{json .Status}},"Ports":{{json .Ports}}}' }}
+      register: i7y_containers
+      changed_when: false
+    - name: Return container summaries
+      ansible.builtin.debug:
+        msg: '{{ i7y_containers.stdout_lines | map("from_json") | list }}'
+    - name: Persist bounded inspection evidence on the controller
+      ansible.builtin.copy:
+        dest: '{{ i7y_result_output }}'
+        mode: '0600'
+        content: '{{ {"containers": i7y_containers.stdout_lines | map("from_json") | list} | to_json }}'
+      delegate_to: localhost
+      when: i7y_result_output is defined

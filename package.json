@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "workspaces": [
-    "apps/web"
+    "apps/web",
+    "apps/desktop",
+    "apps/mobile"
   ],
   "scripts": {
     "dev": "npm run dev --workspace @i7y/web",
@@ -13,10 +15,18 @@
     "test": "tsx --test tests/*.test.js",
     "start": "npm run backend:up",
     "stop": "npm run backend:down",
-    "typecheck": "npm run typecheck --workspace @i7y/web",
+    "typecheck": "npm run typecheck --workspace @i7y/web && npm run typecheck --workspace @i7y/desktop",
     "backend:up": "docker compose up -d",
     "backend:down": "docker compose down",
-    "backend:logs": "docker compose logs -f pocketbase"
+    "backend:logs": "docker compose logs -f pocketbase",
+    "desktop:dev": "npm run dev --workspace @i7y/desktop",
+    "build:desktop": "npm run build --workspace @i7y/desktop --",
+    "dev:desktop:web": "npm run dev --workspace @i7y/web -- --mode desktop --port 5178 --strictPort",
+    "build:web:desktop": "npm run build --workspace @i7y/web -- --mode desktop --outDir dist-desktop",
+    "mobile:dev": "npm run start --workspace @i7y/mobile",
+    "mobile:ios": "npm run ios --workspace @i7y/mobile",
+    "mobile:android": "npm run android --workspace @i7y/mobile",
+    "typecheck:mobile": "npm run typecheck --workspace @i7y/mobile"
   },
   "devDependencies": {
     "tsx": "^4.23.15"

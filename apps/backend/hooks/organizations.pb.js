@@ -105,6 +105,7 @@ routerAdd('POST','/api/i7y/workspaces/{id}/transfer',e=>{
     const r=app.findRecordById('workspaces',e.request.pathValue('id')),org=String(e.requestInfo().body.organization||'')
     app.findRecordById('organizations',org)
     if(org===r.getString('organization'))return
+    require(__hooks+'/lib/alerts.js').removeTarget(app,'workspace',r.id,'resource_transferred',e.auth.id)
     for(const agent of app.findRecordsByFilter('server_agents','server.workspace={:workspace}','',0,0,{workspace:r.id}))app.delete(agent)
     r.set('organization',org);app.save(r)
   });return e.noContent(204)

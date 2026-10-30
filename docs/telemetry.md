@@ -98,3 +98,9 @@ The reviewed installer is `apps/agent/deploy/install-host-windows.ps1`. It requi
 Host reports include `host.operating_system` with family, distribution/product name, version, kernel/build and agent architecture. Linux reads os-release as data without executing it, and reads the kernel release from procfs. Windows reads product metadata from the local machine registry and the actual kernel version from RtlGetVersion. Older reports without these fields remain supported.
 
 Windows session presence is limited to `host.rdp_session_active` (true, false, or null when unknown) and the existing `observed_at` timestamp. The collector queries session connection state and protocol only, never username, client address, session timestamps, applications or event logs. Session IDs used internally by the Windows API are not serialized. Disconnected sessions and local console sessions do not count as active RDP. A five-minute observation is not an exact login time or proof of human activity.
+
+### Last RDP access
+
+Windows agent 0.1.11 adds `host.last_rdp_access_at`: the UTC timestamp of the latest remote login or reconnection found in the `Microsoft-Windows-TerminalServices-LocalSessionManager/Operational` channel (events 21/25, excluding local addresses). The query times out after eight seconds and does not transmit usernames or client addresses. Unavailable logs, missing events or insufficient permissions produce `null`; they do not mean the VM has never been accessed.
+
+The list shows complete days since that event, or an active session when the current collection confirms an RDP connection. Stale telemetry does not confirm an absence of access. Older agents show unknown information until upgraded. The count depends on Windows event retention and does not measure application usage.

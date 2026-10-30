@@ -1,14 +1,18 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
-import { activeOrganization, organizationChoices, globalAdmin, organizationApi, loadOrganizations, management } from '../api'
+import { activeOrganization, organizationChoices, globalAdmin, organizationApi, loadOrganizations, management, setOrganization } from '../api'
 import { t, locale } from '../i18n'
+import PageHeader from './PageHeader.vue'
+import { leadingRowActions } from '../table-columns'
+import PageActions from './PageActions.vue'
 const props=defineProps({route:Object})
 const emit=defineEmits(['changed','select'])
 const q=useQuasar()
 const members=ref([]), invitations=ref([]), error=ref(''), busy=ref(false), loading=ref(false), link=ref(''), name=ref(''), email=ref(''), role=ref('reader'), workspaces=ref([]), workspace=ref(null), destination=ref(null), search=ref('')
-const current=computed(()=>organizationChoices.value.find(r=>r.id===activeOrganization.value))
-const admin=computed(()=>globalAdmin.value || current.value?.role==='admin')
+const organizationId=computed(()=>props.route?.organization || activeOrganization.value)
+const current=computed(()=>organizationChoices.value.find(r=>r.id===organizationId.value))
+const admin=computed(()=>!!current.value && (globalAdmin.value || current.value?.role==='admin'))
 const section=computed(()=>props.route?.section || 'organizations')
 const action=computed(()=>props.route?.action || 'list')
 const listing=computed(()=>action.value==='list')
@@ -16,30 +20,41 @@ const roles=computed(()=>[{label:t('Administrator'),value:'admin'},{label:t('Edi
 const roleLabel=value=>roles.value.find(r=>r.value===value)?.label || value
 const selected=computed(()=>(section.value==='members'?members.value:invitations.value).find(r=>r.id===props.route?.id))
 const protectedMember=row=>row?.role==='admin' && members.value.filter(member=>member.role==='admin').length===1
+function rowActions(row) {
+  if(section.value==='members')return [{label:t('Edit member'),icon:'edit',href:`#/organizations/${organizationId.value}/members/${row.id}/edit`,disable:protectedMember(row)},{label:t('Remove member'),icon:'person_remove',color:'negative',href:`#/organizations/${organizationId.value}/members/${row.id}/delete`,disable:protectedMember(row)}]
+  return !row.used_at && !row.revoked_at ? [{label:t('Revoke invitation'),icon:'block',color:'negative',href:`#/organizations/${organizationId.value}/invitations/${row.id}/revoke`}] : []
+}
 const memberProtected=computed(()=>section.value==='members' && protectedMember(selected.value))
 const sectionLabel=computed(()=>t(section.value==='members'?'Members':section.value==='invitations'?'Invitations':'Organizations'))
 const title=computed(()=>listing.value?sectionLabel.value:t(section.value==='members'?(action.value==='edit'?'Edit member':'Remove member'):section.value==='invitations'?(action.value==='new'?'Generate invitation':'Revoke invitation'):({new:'Create organization',edit:'Edit organization',delete:'Delete organization',transfer:'Transfer workspace'})[action.value]))
-const back=computed(()=>section.value==='organizations'?'#/organizations':'#/organizations/'+section.value)
+const headerActions=computed(()=>[
+  ...(section.value==='organizations' && globalAdmin.value ? [{label:t('Create'),icon:'add',href:'#/organizations/new'}] : []),
+  ...(section.value==='invitations' && admin.value ? [{label:t('Generate invitation'),icon:'add',href:`#/organizations/${organizationId.value}/invitations/new`}] : []),
+  {label:t('Refresh'),icon:'refresh',loading:loading.value,onClick:refresh},
+])
+const back=computed(()=>section.value==='organizations'?'#/organizations':`#/organizations/${organizationId.value}/${section.value}`)
 const rows=computed(()=>section.value==='organizations'?organizationChoices.value:section.value==='members'?members.value:invitations.value)
 const status=row=>t(row.used_at?'Accepted':row.revoked_at?'Revoked':Date.parse(row.expires_at?.replace(' ','T'))<=Date.now()?'Expired':'Pending')
-const columns=computed(()=>[
+const columns=computed(()=>leadingRowActions([
   {name:'name',label:t(section.value==='invitations'?'Email':'Name'),field:row=>row.name || row.email,align:'left' as const,sortable:true},
   ...(section.value==='members'?[{name:'email',label:t('Email'),field:'email',align:'left' as const,sortable:true}]:[]),
   {name:'role',label:t('Permission'),field:row=>roleLabel(row.role),align:'left' as const,sortable:true},
   ...(section.value==='invitations'?[{name:'status',label:t('Status'),field:status,align:'left' as const},{name:'expires',label:t('Expires'),field:row=>new Date(row.expires_at.replace(' ','T')).toLocaleString(locale.value),align:'left' as const}]:[]),
-  {name:'action',label:'',field:'id',align:'right' as const},
-])
-const allowed=computed(()=>section.value==='organizations'?(action.value==='edit'?admin.value:listing.value || globalAdmin.value):admin.value)
+  {name:'action',label:'',field:'id',align:'right' as const,style:'width:1%;white-space:nowrap',headerStyle:'width:1%'},
+]))
+const allowed=computed(()=>props.route?.organization && !current.value ? false : section.value==='organizations'?(action.value==='edit'?admin.value:listing.value || globalAdmin.value):admin.value)
 const required=value=>!!String(value || '').trim() || t('Required field')
-function navigate(path){window.location.hash='#/organizations/'+path}
-function open(row,path){emit('select',row.id,'#/organizations/'+path)}
+function navigate(path){window.location.hash=`#/organizations/${organizationId.value}/${path}`}
+function open(row,path){window.location.hash=`#/organizations/${row.id}/${path}`}
 async function load(){
+  if(props.route?.organization && current.value && activeOrganization.value!==organizationId.value)setOrganization(organizationId.value)
+  if(!props.route?.organization && current.value && (section.value!=='organizations' || ['edit','delete','transfer'].includes(action.value))){navigate(section.value==='organizations'?action.value:section.value+(listing.value?'':action.value==='new'?'/new':`/${props.route.id}/${action.value}`));return}
   error.value='';link.value='';search.value='';name.value=action.value==='new'?'':current.value?.name || '';email.value='';role.value='reader';workspace.value=null;destination.value=null
   if(!allowed.value || section.value==='organizations')return
   loading.value=true
   try{
-    if(section.value==='members')members.value=(await organizationApi.members(activeOrganization.value)).items
-    else invitations.value=(await organizationApi.invitations(activeOrganization.value)).items
+    if(section.value==='members')members.value=(await organizationApi.members(organizationId.value)).items
+    else invitations.value=(await organizationApi.invitations(organizationId.value)).items
     if(!listing.value && action.value!=='new'){
       if(!selected.value)throw new Error(t('Record not found'))
       role.value=selected.value.role
@@ -48,11 +63,11 @@ async function load(){
 }
 async function refresh(){loading.value=true;try{await loadOrganizations();emit('changed');await load()}catch(e){error.value=e.response?.message || t('Unable to complete this action.')}finally{loading.value=false}}
 async function submit(){
-  if(busy.value || !allowed.value)return
+  if(busy.value || !allowed.value || (action.value!=='new' && !current.value))return
   if(memberProtected.value){error.value=t('Promote another administrator before removing or changing this member.');return}
   busy.value=true;error.value=''
   try{
-    const org=activeOrganization.value
+    const org=organizationId.value
     if(section.value==='organizations'){
       if(action.value==='new')await organizationApi.create(name.value)
       if(action.value==='edit')await organizationApi.rename(org,name.value)
@@ -73,40 +88,37 @@ async function submit(){
 }
 async function searchWorkspace(value,done){try{const r=await management.list('workspaces',{filter:value?`login ~ ${JSON.stringify(value)}`:'',perPage:50});done(()=>workspaces.value=r.items.map(w=>({label:w.login,value:w.id})))}catch{done(()=>{})}}
 async function copy(){try{await navigator.clipboard.writeText(link.value);q.notify({type:'positive',message:t('Copied to clipboard')})}catch{error.value=t('Unable to copy. Select the text manually.')}}
-watch(()=>[section.value,action.value,props.route?.id,activeOrganization.value].join(':'),load,{immediate:true})
+watch(()=>[section.value,action.value,props.route?.id,organizationId.value].join(':'),load,{immediate:true})
 </script>
 
 <template>
   <q-page class="q-pa-md inventory-page">
-    <div class="page-heading">
-      <h1>{{title}}</h1>
-      <div v-if="!listing" class="page-actions"><q-btn flat no-caps icon="arrow_back" :label="t('Back to list')" :href="back" :disable="busy" /></div>
-    </div>
+    <PageHeader v-if="!listing" :title="title" />
+    <PageHeader v-else :title="sectionLabel" :breadcrumbs="section!=='organizations' ? [{label:t('Organizations'),href:'#/organizations'}] : undefined" />
     <q-banner v-if="error" class="error-banner rounded-borders" role="alert">{{error}}</q-banner>
     <q-banner v-if="!current && !globalAdmin" class="q-mb-md">{{t('No organization access yet. Ask an administrator for an invitation.')}}</q-banner>
     <q-banner v-if="!allowed" class="q-mb-md">{{t('Your session expired or you do not have permission. Sign in again.')}}</q-banner>
     <template v-else-if="listing">
       <q-card flat bordered>
-        <div class="panel-heading"><div><h2>{{section==='organizations'?sectionLabel:current?.name}}</h2><p>{{rows.length}} {{t('found')}}</p></div></div>
-        <q-tabs v-if="section!=='organizations'" dense no-caps align="left" active-color="primary" indicator-color="primary" :model-value="section" class="q-px-md q-mb-md"><q-tab @click="navigate('members')" name="members" :label="t('Members')" /><q-tab @click="navigate('invitations')" name="invitations" :label="t('Invitations')" /></q-tabs>
-        <div class="inventory-controls container-controls organization-controls"><div class="inventory-actions"><q-input v-model="search" outlined dense clearable :placeholder="t('Search')" :aria-label="t('Search')" class="search-input"><template #prepend><q-icon name="search" size="21px" /></template></q-input><q-btn flat no-caps color="primary" icon="filter_alt_off" :label="t('Clear all filters')" :disable="!search" @click="search=''" /><div class="page-actions"><q-btn v-if="section==='organizations' && globalAdmin" unelevated no-caps color="primary" icon="add" :label="t('Create')" href="#/organizations/new" />
-          <q-btn v-if="section==='invitations' && admin" unelevated no-caps color="primary" icon="add" :label="t('Generate invitation')" href="#/organizations/invitations/new" />
-          <q-btn v-if="section!=='organizations'" flat no-caps icon="arrow_back" :label="t('Organizations')" href="#/organizations" />
-          <q-btn unelevated no-caps color="primary" icon="refresh" :label="t('Refresh')" :loading="loading" @click="refresh" /></div></div></div>
-        <q-table flat class="inventory-table" :rows="rows" :columns="columns" :filter="search" row-key="id" :loading="loading" :pagination="{rowsPerPage:10}">
+        <q-tabs v-if="section!=='organizations'" dense no-caps align="left" active-color="primary" indicator-color="primary" :model-value="section" class="panel-tabs"><q-tab @click="navigate('members')" name="members" :label="t('Members')" /><q-tab @click="navigate('invitations')" name="invitations" :label="t('Invitations')" /></q-tabs>
+        <div class="inventory-controls container-controls organization-controls"><div class="inventory-actions"><q-input v-model="search" outlined dense clearable :placeholder="t('Search')" :aria-label="t('Search')" class="search-input"><template #prepend><q-icon name="search" size="21px" /></template></q-input><q-btn flat no-caps color="primary" icon="filter_alt_off" :label="t('Clear all filters')" :disable="!search" @click="search=''" /><PageActions :actions="headerActions" /></div></div>
+        <q-table flat class="inventory-table organization-table" :grid="q.screen.lt.md && section!=='organizations'" :rows="rows" :columns="columns" :filter="search" row-key="id" :loading="loading" :pagination="{rowsPerPage:10}">
+          <template #item="slot"><q-card flat bordered class="organization-mobile-card"><q-card-section><div class="row items-start no-wrap q-gutter-sm"><div class="col organization-card-title"><strong>{{slot.row.name || slot.row.email}}</strong><small v-if="section==='members' && slot.row.name">{{slot.row.email}}</small></div><PageActions :actions="rowActions(slot.row)" /></div><dl class="organization-card-meta"><div><dt>{{t('Permission')}}</dt><dd>{{roleLabel(slot.row.role)}}</dd></div><div v-if="section==='invitations'"><dt>{{t('Status')}}</dt><dd>{{status(slot.row)}}</dd></div><div v-if="section==='invitations'"><dt>{{t('Expires')}}</dt><dd>{{new Date(slot.row.expires_at.replace(' ','T')).toLocaleString(locale)}}</dd></div></dl><small v-if="section==='members' && protectedMember(slot.row)" class="member-protection">{{t('Last administrator')}}</small></q-card-section></q-card></template>
           <template #body-cell-name="slot"><q-td :props="slot"><button v-if="section==='organizations'" class="table-link" @click="emit('select',slot.row.id,'#/workspaces')">{{slot.value}}</button><span v-else>{{slot.value}}</span></q-td></template>
           <template #body-cell-role="slot"><q-td :props="slot">{{slot.value}}<small v-if="section==='members' && protectedMember(slot.row)" class="member-protection">{{t('Last administrator')}}</small></q-td></template>
           <template #body-cell-action="slot"><q-td :props="slot">
             <template v-if="section==='organizations'">
-              <template v-if="globalAdmin || slot.row.role==='admin'">
-                <q-btn flat round dense icon="group" :aria-label="t('Members')" @click="open(slot.row,'members')"><q-tooltip>{{t('Members')}}</q-tooltip></q-btn>
-                <q-btn flat round dense icon="mail_outline" :aria-label="t('Invitations')" @click="open(slot.row,'invitations')"><q-tooltip>{{t('Invitations')}}</q-tooltip></q-btn>
-                <q-btn flat round dense icon="edit" :aria-label="t('Edit organization')" @click="open(slot.row,'edit')"><q-tooltip>{{t('Edit')}}</q-tooltip></q-btn>
-              </template>
-              <q-btn v-if="globalAdmin" flat round dense icon="more_vert" :aria-label="t('More actions')"><q-menu auto-close><q-list><q-item clickable @click="open(slot.row,'transfer')"><q-item-section>{{t('Transfer workspace')}}</q-item-section></q-item><q-item clickable @click="open(slot.row,'delete')"><q-item-section class="text-negative">{{t('Delete organization')}}</q-item-section></q-item></q-list></q-menu></q-btn>
+              <div v-if="!q.screen.lt.md && (globalAdmin || slot.row.role==='admin')" class="page-actions organization-row-actions"><q-btn flat round dense icon="people" :aria-label="t('Members')" @click="open(slot.row,'members')"/><q-btn flat round dense icon="mail_outline" :aria-label="t('Invitations')" @click="open(slot.row,'invitations')"/><q-btn flat round dense icon="edit" :aria-label="t('Edit organization')" @click="open(slot.row,'edit')"/><q-btn v-if="globalAdmin" flat round dense icon="swap_horiz" :aria-label="t('Transfer workspace')" @click="open(slot.row,'transfer')"/><q-btn v-if="globalAdmin" flat round dense color="negative" icon="delete_outline" :aria-label="t('Delete organization')" @click="open(slot.row,'delete')"/></div>
+              <q-btn v-else-if="globalAdmin || slot.row.role==='admin'" flat round dense icon="more_vert" :aria-label="t('More actions')"><q-menu auto-close><q-list>
+                <q-item clickable @click="open(slot.row,'members')"><q-item-section>{{t('Members')}}</q-item-section></q-item>
+                <q-item clickable @click="open(slot.row,'invitations')"><q-item-section>{{t('Invitations')}}</q-item-section></q-item>
+                <q-item clickable @click="open(slot.row,'edit')"><q-item-section>{{t('Edit organization')}}</q-item-section></q-item>
+                <q-item v-if="globalAdmin" clickable @click="open(slot.row,'transfer')"><q-item-section>{{t('Transfer workspace')}}</q-item-section></q-item>
+                <q-item v-if="globalAdmin" clickable @click="open(slot.row,'delete')"><q-item-section class="text-negative">{{t('Delete organization')}}</q-item-section></q-item>
+              </q-list></q-menu></q-btn>
             </template>
-            <template v-else-if="section==='members'"><span class="member-actions"><q-btn flat round dense icon="edit" :aria-label="t('Edit member')" :disable="protectedMember(slot.row)" :href="protectedMember(slot.row)?undefined:`#/organizations/members/${slot.row.id}/edit`" /><q-btn flat round dense color="negative" icon="person_remove" :aria-label="t('Remove member')" :disable="protectedMember(slot.row)" :href="protectedMember(slot.row)?undefined:`#/organizations/members/${slot.row.id}/delete`" /><q-tooltip v-if="protectedMember(slot.row)">{{t('Promote another administrator before removing or changing this member.')}}</q-tooltip></span></template>
-            <q-btn v-else-if="!slot.row.used_at && !slot.row.revoked_at" flat round dense color="negative" icon="block" :aria-label="t('Revoke invitation')" :href="`#/organizations/invitations/${slot.row.id}/revoke`" />
+            <template v-else-if="section==='members'"><span class="member-actions"><template v-if="!q.screen.lt.md"><q-btn flat round dense icon="edit" :aria-label="t('Edit member')" :disable="protectedMember(slot.row)" :href="protectedMember(slot.row)?undefined:`#/organizations/${organizationId}/members/${slot.row.id}/edit`" /><q-btn flat round dense color="negative" icon="person_remove" :aria-label="t('Remove member')" :disable="protectedMember(slot.row)" :href="protectedMember(slot.row)?undefined:`#/organizations/${organizationId}/members/${slot.row.id}/delete`" /></template><q-btn v-else flat round dense icon="more_vert" :aria-label="t('More actions')" :disable="protectedMember(slot.row)"><q-menu><q-list><q-item clickable v-close-popup :href="`#/organizations/${organizationId}/members/${slot.row.id}/edit`"><q-item-section>{{t('Edit member')}}</q-item-section></q-item><q-item clickable v-close-popup :href="`#/organizations/${organizationId}/members/${slot.row.id}/delete`"><q-item-section class="text-negative">{{t('Remove member')}}</q-item-section></q-item></q-list></q-menu></q-btn><q-tooltip v-if="protectedMember(slot.row)">{{t('Promote another administrator before removing or changing this member.')}}</q-tooltip></span></template>
+            <q-btn v-else-if="!slot.row.used_at && !slot.row.revoked_at" flat round dense color="negative" icon="block" :aria-label="t('Revoke invitation')" :href="`#/organizations/${organizationId}/invitations/${slot.row.id}/revoke`" />
           </q-td></template>
           <template #no-data><div class="empty-state"><q-icon name="search_off" size="36px" /><h3>{{t('No records in this selection')}}</h3></div></template>
         </q-table>
@@ -116,9 +128,9 @@ watch(()=>[section.value,action.value,props.route?.id,activeOrganization.value].
       <q-card-section v-if="loading" class="q-pa-xl text-center"><q-spinner color="primary" /></q-card-section>
       <q-form v-else @submit="submit" class="q-pa-lg q-gutter-y-md">
         <q-banner v-if="memberProtected" class="bg-orange-1 text-dark">{{t('Promote another administrator before removing or changing this member.')}}</q-banner>
-        <template v-if="link"><h2 class="text-h6 q-ma-none">{{t('Invitation link')}}</h2><p>{{t('Copy this link now. It will not be shown again.')}}</p><q-input :model-value="link" outlined readonly type="textarea" autogrow :label="t('Invitation link')" /><q-btn unelevated no-caps color="primary" icon="content_copy" :label="t('Copy link')" @click="copy" /><q-btn flat no-caps :label="t('Back to list')" :href="back" /></template>
+        <template v-if="link"><h2 class="text-h6 q-ma-none">{{t('Invitation link')}}</h2><p>{{t('Copy this link now. It will not be shown again.')}}</p><q-input :key="q.screen.width" :model-value="link" outlined readonly type="textarea" autogrow :label="t('Invitation link')" /><q-btn unelevated no-caps color="primary" icon="content_copy" :label="t('Copy link')" @click="copy" /><q-btn flat no-caps :label="t('Back to list')" :href="back" /></template>
         <template v-else>
-          <p v-if="current && action!=='new'" class="text-grey-7 q-mt-none">{{current.name}}</p>
+          <p v-if="current && section!=='organizations' && action!=='new'" class="text-grey-7 q-mt-none">{{current.name}}</p>
           <q-input v-if="section==='organizations' && ['new','edit'].includes(action)" v-model="name" outlined autofocus :label="t('Organization name')" :rules="[required]" />
           <template v-if="action==='transfer'"><p>{{t('Transferring a workspace revokes its daemon credentials. Provision them again in the destination organization.')}}</p><q-select v-model="workspace" :options="workspaces" emit-value map-options use-input @filter="searchWorkspace" outlined :label="t('Workspace')" :rules="[required]" /><q-select v-model="destination" :options="organizationChoices.filter(r=>r.id!==current?.id).map(r=>({label:r.name,value:r.id}))" emit-value map-options outlined :label="t('Destination organization')" :rules="[required]" /></template>
           <template v-if="section==='invitations' && action==='new'"><p>{{t('Generate a link and send it through any channel. Valid for seven days.')}}</p><q-input v-model="email" outlined type="email" autofocus :label="t('Email')" :rules="[required]" /><q-select v-model="role" :options="roles" emit-value map-options outlined :label="t('Permission')" /></template>
@@ -133,7 +145,8 @@ watch(()=>[section.value,action.value,props.route?.id,activeOrganization.value].
 
 <style scoped>
 .member-actions{display:inline-flex}.member-protection{display:block;font-size:11px;color:#71717a;margin-top:4px}
-.organization-controls{padding-top:12px}
-.organization-form{max-width:760px;margin:0 auto 24px}
+
+.organization-form{width:100%;margin:0 0 24px}
 .organization-form p,.organization-form h2{overflow-wrap:anywhere}
+.organization-mobile-card{width:100%;margin:6px 0}.organization-card-title{min-width:0;overflow-wrap:anywhere}.organization-card-title small{display:block;margin-top:4px;color:var(--i7y-muted,#71717a)}.organization-card-meta{margin:16px 0 0;display:grid;gap:10px}.organization-card-meta>div{display:flex;justify-content:space-between;gap:16px}.organization-card-meta dt{color:var(--i7y-muted,#71717a);font-size:12px}.organization-card-meta dd{margin:0;text-align:right;overflow-wrap:anywhere;min-width:0}.organization-table :deep(.q-table__grid-content){padding:8px;display:block}
 </style>

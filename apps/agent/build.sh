@@ -2,7 +2,7 @@
 set -eu
 cd "$(dirname "$0")"
 version=${I7Y_AGENT_VERSION:-0.1.9}
-windows_version=${I7Y_WINDOWS_AGENT_VERSION:-0.1.10}
+windows_version=${I7Y_WINDOWS_AGENT_VERSION:-0.1.11}
 mkdir -p dist
 for arch in amd64 arm64; do
   CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -buildvcs=false -ldflags="-s -w -X main.version=$version" -o "dist/i7y-agent-linux-$arch" ./cmd/i7y-agent

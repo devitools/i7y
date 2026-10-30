@@ -1,0 +1,16 @@
+---
+- name: Check the selected server through Ansible
+  hosts: all
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Check Ansible connectivity
+      ansible.builtin.ping:
+      register: i7y_ping
+    - name: Save the connectivity result on the automation host
+      ansible.builtin.copy:
+        dest: '{{ i7y_ping_output }}'
+        content: '{{ {"ping": i7y_ping.ping} | to_json }}'
+        mode: '0600'
+      delegate_to: localhost
+      run_once: true

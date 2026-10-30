@@ -20,10 +20,11 @@ function current(r) { try { return JSON.parse(r.getString('telemetry')) || {} } 
 function reconcile(app,serverId,b) {
   const server=app.findRecordById('servers',serverId)
   const previous=current(server)
-  if (previous.observed_at && Date.parse(previous.observed_at)>=Date.parse(b.observed_at)) return
+  if (previous.observed_at && Date.parse(previous.observed_at)>=Date.parse(b.observed_at)) return {applied:false,containers:{},missing:[]}
+  const result={applied:true,containers:{},missing:[]}
   if (b.collection_mode==='host') {
     server.set('telemetry',{state:b.errors.length?'degraded':'healthy',collection_mode:'host',observed_at:b.observed_at,host:b.host,agent_version:b.agent_version,errors:b.errors,warnings:[],docker_complete:false,discovery_complete:false})
-    server.set('last_seen',b.observed_at);app.save(server);return
+    server.set('last_seen',b.observed_at);app.save(server);return result
   }
   const projects=app.findRecordsByFilter('projects','server={:server}','',0,0,{server:serverId})
   const containers=app.findRecordsByFilter('containers','project.server={:server}','',0,0,{server:serverId})
@@ -46,8 +47,8 @@ function reconcile(app,serverId,b) {
   }
   for(const c of b.containers) {
     const parent=map[c.project_key]
-    if(!parent) continue
     const matches=containers.filter(r=>r.getString('name')===c.name)
+    if(!parent) {for(const match of matches){seenC.add(match.id);seenP.add(match.getString('project'))} continue}
     if(matches.length>1) {warnings.push('Ambiguous container: '+c.name); for(const match of matches){seenC.add(match.id);seenP.add(match.getString('project'))} continue}
     let row=matches[0]
     if(!row) {row=create('containers',{project:parent.id,name:c.name,image:c.image});containers.push(row)}
@@ -62,9 +63,9 @@ function reconcile(app,serverId,b) {
     if(b.metrics_complete===false && c.state==='running' && previousContainer.docker_id===c.docker_id) {
       for(const field of ['cpu_percent','memory_bytes','memory_limit_bytes']) if(field in previousContainer) values[field]=previousContainer[field]
     }
-    saveCurrent(row,values);seenC.add(row.id)
+    saveCurrent(row,values);seenC.add(row.id);result.containers[c.name]=row.id
   }
-  if(b.docker_complete) for(const c of containers) if(!seenC.has(c.id)) saveCurrent(c,{state:'missing'})
+  if(b.docker_complete) for(const c of containers) if(!seenC.has(c.id)) {saveCurrent(c,{state:'missing'});result.missing.push(c.id)}
   for(const p of projects) {
     const children=containers.filter(c=>c.getString('project')===p.id).map(c=>current(c))
     let state='unknown'
@@ -78,5 +79,6 @@ function reconcile(app,serverId,b) {
   if(b.docker_complete) server.set('inventory_known',true)
   const degraded=(b.errors.length || warnings.length || !b.docker_complete || !b.discovery_complete || projects.some(p=>['degraded','stopped','missing'].includes((current(p)).state)))
   saveCurrent(server,{state:degraded?'degraded':'healthy',host:b.host,agent_version:b.agent_version,errors:b.errors,warnings,docker_complete:b.docker_complete,discovery_complete:b.discovery_complete})
+  return result
 }
 module.exports={validate,reconcile}

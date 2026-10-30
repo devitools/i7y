@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "i7y",
+  "version": "0.1.0",
+  "identifier": "com.devitools.i7y",
+  "build": {
+    "beforeDevCommand": "npm --prefix ../.. run dev:desktop:web",
+    "devUrl": "http://127.0.0.1:5178",
+    "beforeBuildCommand": "npm --prefix ../.. run build:web:desktop",
+    "frontendDist": "../../web/dist-desktop"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "i7y",
+        "width": 1440,
+        "height": 960,
+        "minWidth": 900,
+        "minHeight": 600,
+        "titleBarStyle": "Transparent",
+        "backgroundColor": "#ffffff"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.icns"
+    ],
+    "externalBin": [
+      "binaries/i7y-mcp"
+    ]
+  }
+}

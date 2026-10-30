@@ -1,24 +1,27 @@
 import type { RouteState } from './types'
-import PocketBase from 'pocketbase'
+import PocketBase, { BaseAuthStore } from 'pocketbase'
+import { invoke } from '@tauri-apps/api/core'
+import { desktopRuntime, desktopFetch, desktopBackend, readDesktopBackend, persistDesktopBackend, syncDesktopContext } from './desktop-backend'
 import { ref } from 'vue'
 import { createOrganizationTransport } from './organization-context.ts'
 import { telemetrySince, serverStats } from './telemetry-summary.ts'
 import { createQueryCache } from './query-cache.ts'
 import { inventoryQuery } from './inventory-query.ts'
 import { createManagementApi } from './management.ts'
-const pb = new PocketBase(import.meta.env.VITE_POCKETBASE_URL || '/')
+export const pb = new PocketBase(desktopRuntime?'https://backend.invalid/':import.meta.env.VITE_POCKETBASE_URL || '/', desktopRuntime ? new BaseAuthStore() : undefined)
 export const authStore = pb.authStore
 export const activeOrganization = ref(null)
 export const organizationChoices = ref([])
 export const globalAdmin = ref(false)
-const organizationTransport=createOrganizationTransport(()=>activeOrganization.value)
+const organizationTransport=createOrganizationTransport(()=>activeOrganization.value,desktopRuntime?desktopFetch:undefined,()=>authStore.token)
 pb.beforeSend=organizationTransport.beforeSend
 export function setOrganization(id) {
-  if(id===activeOrganization.value)return
+  if(id===activeOrganization.value){if(desktopRuntime)syncDesktopContext(id);return}
   organizationTransport.invalidate()
   pb.cancelAllRequests()
   cache.clear()
   activeOrganization.value=id
+  if(desktopRuntime)syncDesktopContext(id)
   if(id)localStorage.setItem('i7y.organization.'+authStore.record?.id,id)
 }
 export async function loadOrganizations() {
@@ -55,7 +58,7 @@ export const tokenApi = {
 }
 const cache = createQueryCache()
 export const invalidateInventory = () => cache.clear()
-authStore.onChange(() => {cache.clear();if(!authStore.isValid){organizationTransport.invalidate();activeOrganization.value=null;organizationChoices.value=[];globalAdmin.value=false}})
+authStore.onChange(() => {if(desktopRuntime && !authStore.token)void invoke('desktop_session_clear');if(desktopRuntime){if(authStore.isValid)localStorage.setItem('i7y.desktop.authBackend',desktopBackend.value);else localStorage.removeItem('i7y.desktop.authBackend')}cache.clear();if(!authStore.isValid){organizationTransport.invalidate();activeOrganization.value=null;organizationChoices.value=[];globalAdmin.value=false}})
 const rawManagement = createManagementApi(pb)
 export const management = {...rawManagement}
 for (const method of ['create','update','remove']) management[method]=async(...args)=>{
@@ -129,4 +132,41 @@ export async function inventoryOperatingSystems(workspace=null) {
   const rows=await pb.collection('i7y_servers').getFullList({fields:'id,os_name',filter:workspace?pb.filter('workspace_login = {:workspace}',{workspace}):'',requestKey:null})
   return [...new Set(rows.map(row=>row.os_name).filter(Boolean))].sort((a,b)=>a.localeCompare(b))
  })
+}
+
+export const desktopAuthApi = {
+  available: async () => {
+    const result=await pb.send('/api/i7y/desktop', {method:'GET',requestKey:null})
+    if(result?.browser_login!==true)throw Object.assign(new Error('Browser sign-in unavailable'),{status:404})
+    return result
+  },
+  authorize: (request: string, challenge: string) => pb.send('/api/i7y/desktop/authorize', {method:'POST',body:{request,challenge}}),
+  exchange: async (request: string, verifier: string, signal?: AbortSignal) => {
+    const result = await pb.send('/api/i7y/desktop/exchange', {method:'POST',body:{request,verifier},requestKey:null,signal})
+    if (!signal?.aborted && result.token && result.record) pb.authStore.save(result.token,result.record)
+    return !!result.token
+  },
+}
+
+export async function initializeDesktopBackend(): Promise<void> {
+  if(!desktopRuntime)return
+  const backend=await readDesktopBackend()
+  if(backend)pb.baseURL=backend
+  const legacyRaw=localStorage.getItem('pocketbase_auth')
+  let legacyToken:string|null=null
+  try {if(backend && localStorage.getItem('i7y.desktop.authBackend')===backend)legacyToken=JSON.parse(legacyRaw || '{}').token || null}catch {}
+  if(backend){
+    const restored=await invoke<{token:string;record:any}|null>('desktop_session_restore',{legacyToken})
+    if(restored)pb.authStore.save(restored.token,restored.record)
+  }
+  localStorage.removeItem('pocketbase_auth')
+}
+export async function selectDesktopBackend(url: string): Promise<void> {
+  if(url===desktopBackend.value)return
+  const backend=await persistDesktopBackend(url)
+  organizationTransport.invalidate()
+  pb.cancelAllRequests()
+  pb.authStore.clear()
+  cache.clear()
+  pb.baseURL=backend
 }

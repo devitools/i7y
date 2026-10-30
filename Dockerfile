@@ -2,9 +2,13 @@ FROM node:22.23.4-alpine AS frontend
 WORKDIR /app
 COPY package*.json ./
 COPY apps/web/package.json ./apps/web/package.json
-RUN npm ci
-COPY apps/web/index.html apps/web/vite.config.ts apps/web/tsconfig.json ./apps/web/
+COPY apps/desktop/package.json ./apps/desktop/package.json
+COPY apps/mobile/package.json ./apps/mobile/package.json
+RUN npm ci --workspace @i7y/web --include-workspace-root
+COPY apps/web/index.html apps/web/mobile-auth.html apps/web/vite.config.ts apps/web/tsconfig.json ./apps/web/
 COPY apps/web/src ./apps/web/src
+COPY apps/web/public ./apps/web/public
+COPY packages/theme ./packages/theme
 COPY docs/install-agent.en.md ./docs/
 RUN npm run build
 FROM alpine:3.21

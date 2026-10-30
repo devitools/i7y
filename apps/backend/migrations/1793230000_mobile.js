@@ -1,0 +1,17 @@
+migrate(app=>{
+  const text=(name,max=240,required=false,hidden=false)=>({type:'text',name,max,required,hidden})
+  const relation=(name,target)=>({type:'relation',name,collectionId:app.findCollectionByNameOrId(target).id,maxSelect:1,required:true,cascadeDelete:true})
+  const date=name=>({type:'date',name})
+  const number=name=>({type:'number',name,min:0,onlyInt:true})
+  const create=(name,fields,indexes=[])=>app.save(new Collection({name,type:'base',listRule:null,viewRule:null,createRule:null,updateRule:null,deleteRule:null,fields:[...fields,{type:'autodate',name:'created',onCreate:true,onUpdate:false},{type:'autodate',name:'updated',onCreate:true,onUpdate:true}],indexes}))
+  create('mobile_installation',[text('key',32,true),text('instance_id',64,true)],['CREATE UNIQUE INDEX idx_mobile_installation_key ON mobile_installation (key)'])
+  const installation=new Record(app.findCollectionByNameOrId('mobile_installation'))
+  installation.set('key','installation')
+  installation.set('instance_id',$security.randomString(32))
+  app.save(installation)
+  create('mobile_authorizations',[text('request_hash',64,true,true),text('challenge',64,true,true),text('audience',16,true),text('instance_id',64,true),relation('user','users'),date('expires_at'),{type:'bool',name:'consumed'}],['CREATE UNIQUE INDEX idx_mobile_authorization_request ON mobile_authorizations (request_hash)'])
+  create('mobile_devices',[relation('user','users'),text('instance_id',64,true),text('connection_id',36,true),text('binding_id',128,true),text('send_token_encrypted',1024,true,true),{type:'bool',name:'active'},number('start_sequence'),number('cursor')],['CREATE UNIQUE INDEX idx_mobile_device_connection ON mobile_devices (connection_id)','CREATE UNIQUE INDEX idx_mobile_device_binding ON mobile_devices (binding_id)'])
+  create('mobile_outbox',[relation('device','mobile_devices'),relation('notification','incident_notifications'),text('incident_id',15,true),text('event_id',128,true),text('payload_json',4096,true),{type:'select',name:'status',values:['pending','processing','accepted','invalid','cancelled','permanent_failure'],maxSelect:1,required:true},number('attempts'),date('next_attempt_at'),date('lease_until'),text('lease_token',64),text('reason',64)],['CREATE UNIQUE INDEX idx_mobile_outbox_event_device ON mobile_outbox (notification,device)','CREATE INDEX idx_mobile_outbox_dispatch ON mobile_outbox (status,next_attempt_at)'])
+},app=>{
+  for(const name of ['mobile_outbox','mobile_devices','mobile_authorizations','mobile_installation'])app.delete(app.findCollectionByNameOrId(name))
+})

@@ -2,6 +2,12 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { routeHash, readRoute } from '../apps/web/src/routes.ts'
 
+test('server ping has its own route and preserves a safe inventory return URL',()=>{
+  const back='#/servers?workspace=team%40example.com&page=3&sortBy=name'
+  assert.deepEqual(readRoute('#/servers/server01/actions/ping?returnTo='+encodeURIComponent(back)),{view:'serverPing',server:'server01',returnTo:back})
+  assert.equal(readRoute('#/servers/server01/actions/ping?returnTo='+encodeURIComponent('https://example.com')).returnTo,null)
+})
+
 test('nested inventory links preserve workspace, server and project identities', () => {
   const route = {view:'containers',workspace:'team@example.com',server:'team@example.com:192.0.2.10:5',project:'project / a?b&c#1'}
   assert.deepEqual(readRoute(routeHash(route)),route)
@@ -133,4 +139,11 @@ test('empty list filters never become null strings and old URLs recover',()=>{
  const selected=readRoute(routeHash({view:'servers',search:'Windows',operatingSystem:'Windows Server 2019 Standard'}))
  assert.equal(selected.search,'Windows')
  assert.equal(selected.operatingSystem,'Windows Server 2019 Standard')
+})
+
+ test('organization links retain their target independently of active organization', () => {
+  const organization='123456789abcdef'
+  for(const action of ['edit','delete','transfer']) assert.deepEqual(readRoute(`#/organizations/${organization}/${action}`),{view:'organizations',section:'organizations',action,organization})
+  assert.deepEqual(readRoute(`#/organizations/${organization}/members/abcdef123456789/edit`),{view:'organizations',section:'members',action:'edit',id:'abcdef123456789',organization})
+  assert.equal(readRoute(`#/organizations/${organization}/invitations/new`).organization,organization)
 })

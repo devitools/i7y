@@ -1,0 +1,26 @@
+[package]
+name = "i7y-desktop"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77.2"
+
+[build-dependencies]
+cc = "1"
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+i7y-mcp = { path = "../mcp" }
+libc = "0.2"
+rand = "0.8"
+
+i7y-core = { path = "../core" }
+sha2 = "0.10"
+serde_json = "1"
+url = "2"
+serde = { version = "1", features = ["derive"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+tauri = { version = "2", features = [] }
+
+[profile.dev]
+debug = 0
+incremental = false

@@ -1,0 +1,28 @@
+---
+- name: Validate immutable container identity
+  ansible.builtin.assert:
+    that:
+      - i7y_container_id is string
+      - i7y_container_id is match('^[a-f0-9]{64}$')
+    quiet: true
+- name: Read selected container metadata
+  ansible.builtin.command:
+    argv:
+      - docker
+      - inspect
+      - --type
+      - container
+      - --format
+      - >-
+        {{ '{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Config.Image}},"state":{{json .State.Status}}}' }}
+      - '{{ i7y_container_id }}'
+  changed_when: false
+  register: i7y_container_metadata
+- name: Decode observed container state
+  ansible.builtin.set_fact:
+    i7y_observed_container: '{{ i7y_container_metadata.stdout | from_json }}'
+- name: Verify returned container identity
+  ansible.builtin.assert:
+    that:
+      - i7y_observed_container.id == i7y_container_id
+    quiet: true

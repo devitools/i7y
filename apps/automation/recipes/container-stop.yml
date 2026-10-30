@@ -1,0 +1,32 @@
+---
+- name: Stop the reviewed container
+  hosts: all
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Read current state before mutation
+      ansible.builtin.include_tasks: container-observe.yml
+    - name: Reject drift since operation review
+      ansible.builtin.assert:
+        that:
+          - i7y_expected_state is defined
+          - i7y_observed_container.state == i7y_expected_state
+          - i7y_observed_container.state in ["created", "exited", "running"]
+        quiet: true
+    - name: Stop the immutable container ID
+      ansible.builtin.command:
+        argv:
+          - "docker"
+          - "stop"
+          - "--time"
+          - "30"
+          - "{{ i7y_container_id }}"
+      when: i7y_observed_container.state == 'running'
+      changed_when: true
+    - name: Observe the resulting state
+      ansible.builtin.include_tasks: container-observe.yml
+    - name: Verify the resulting container state
+      ansible.builtin.assert:
+        that:
+          - i7y_observed_container.state in ["created", "exited"]
+        quiet: true

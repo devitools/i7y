@@ -3,6 +3,7 @@ import { ref, watch } from 'vue'
 import { inventoryPage, management } from '../api'
 import { deleteContainers } from '../bulk-delete.ts'
 import { t } from '../i18n'
+import PageHeader from './PageHeader.vue'
 const props=defineProps({route:Object,canEdit:Boolean})
 const emit=defineEmits(['back','saved'])
 const records=ref([]),loading=ref(false),busy=ref(false),error=ref('')
@@ -15,7 +16,7 @@ watch(()=>[props.route.ids,props.canEdit],async()=>{
   try {
     const result=await inventoryPage('containers',{ids:props.route.ids,perPage:100,statuses:[]},{force:true})
     if(current===request)records.value=result.items
-  } catch {error.value=t('Unable to load the inventory. Check that PocketBase is running and try again.')}
+  } catch {error.value=t('Unable to load data. Please try again.')}
   finally {if(current===request)loading.value=false}
 },{immediate:true})
 async function submit() {
@@ -31,7 +32,7 @@ async function submit() {
 </script>
 <template>
   <q-page class="q-pa-md inventory-page">
-    <div class="page-heading"><h1>{{t('Delete selected containers')}}</h1><q-btn flat no-caps icon="arrow_back" :label="t('Back to list')" :disable="busy" @click="emit('back')"/></div>
+    <PageHeader :title="t('Delete selected containers')" />
     <q-card flat bordered class="q-pa-lg">
       <q-spinner v-if="loading" color="primary"/>
       <p v-else-if="!canEdit">{{t('Sign in to manage the inventory.')}}</p>

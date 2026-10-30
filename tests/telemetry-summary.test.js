@@ -29,7 +29,7 @@ test('history filters use the PocketBase UTC date format',()=>{
 })
 
 test('server list stats reuse health rules and mark stale samples',async()=>{
- const {serverStats}=await import('../apps/web/src/telemetry-summary.ts')
+ const {serverStats}=await import('../apps/web/src/telemetry-summary.js')
  const now=Date.parse('2026-10-27T12:00:00Z')
  const stats=serverStats({observed_at:'2026-10-27 11:00:00Z',host:{cpu_percent:2,memory_total_bytes:100,memory_available_bytes:60,disks:[{total_bytes:100,available_bytes:80},{total_bytes:100,available_bytes:10}]}},[{telemetry:{state:'running'}},{telemetry:{state:'running',health:'unhealthy'}}],now)
  assert.equal(stats.cpu,2);assert.equal(stats.memory,40);assert.equal(stats.disk,90)
@@ -39,10 +39,20 @@ test('server list stats reuse health rules and mark stale samples',async()=>{
 })
 
 test('server stats expose collected OS details and support older agents',async()=>{
- const {serverStats}=await import('../apps/web/src/telemetry-summary.ts')
+ const {serverStats}=await import('../apps/web/src/telemetry-summary.js')
  const stats=serverStats({host:{operating_system:{pretty_name:'Ubuntu 24.04.3 LTS',architecture:'amd64',kernel:'6.8.0'}}},[])
  assert.equal(stats.operatingSystem,'Ubuntu 24.04.3 LTS')
  assert.equal(stats.operatingSystemDetails,'Ubuntu 24.04.3 LTS · amd64 · 6.8.0')
  assert.equal(serverStats({host:{operating_system:{name:'Windows Server',version_id:'2022'}}},[]).operatingSystem,'Windows Server 2022')
  assert.equal(serverStats(null,[]).operatingSystem,'')
+})
+
+test('RDP access age uses event timestamps and keeps missing data unknown',async()=>{
+ const {serverStats}=await import('../apps/web/src/telemetry-summary.ts')
+ const now=Date.parse('2026-10-28T12:00:00Z')
+ const data={host:{os:'windows',last_rdp_access_at:'2026-10-25T10:00:00Z',rdp_session_active:false}}
+ assert.equal(serverStats(data,[],now).rdpAccessDays,3)
+ assert.equal(serverStats({host:{os:'windows'}},[],now).rdpAccessDays,null)
+ assert.equal(serverStats({host:{os:'windows',last_rdp_access_at:'2027-01-01T00:00:00Z'}},[],now).rdpAccessDays,null)
+ assert.equal(serverStats(data,[],now).windows,true)
 })

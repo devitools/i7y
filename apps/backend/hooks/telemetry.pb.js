@@ -9,6 +9,9 @@ routerAdd('POST','/api/i7y/agents',(e) => {
   const lib=require(__hooks+'/lib/organizations.js');lib.requireRole(e,lib.organization(e.app,target),true)
   const token='i7ya_'+$security.randomString(64)
   e.app.runInTransaction(app=>{
+    const current=app.findRecordById('servers',server)
+    const user=app.findRecordById('users',e.auth.id)
+    lib.requireRole({app,auth:user,requestInfo:()=>e.requestInfo()},lib.organization(app,current),true)
     for (const old of app.findRecordsByFilter('server_agents','server={:server}','',0,0,{server})) app.delete(old)
     const r=new Record(app.findCollectionByNameOrId('server_agents'))
     r.set('server',server); r.set('token_hash',$security.sha256(token)); r.set('prefix',token.slice(0,13)); app.save(r)
@@ -36,11 +39,15 @@ routerAdd('POST','/api/i7y/telemetry/v1/snapshots',e=>{
   const server=agent.getString('server')
   let duplicate=false
   e.app.runInTransaction(app=>{
+    let active
+    try {active=app.findRecordById('server_agents',agent.id)} catch (_) {throw new UnauthorizedError('Agent credential revoked')}
+    if(active.getString('token_hash')!==$security.sha256(token) || active.getString('server')!==server) throw new UnauthorizedError('Agent credential changed')
     const existing=app.findRecordsByFilter('telemetry_samples','server={:server} && sample_id={:sample}','',1,0,{server,sample:body.sample_id})
     if (existing.length) { duplicate=true; return }
     const r=new Record(app.findCollectionByNameOrId('telemetry_samples'))
     r.set('server',server); r.set('sample_id',body.sample_id); r.set('observed_at',body.observed_at); r.set('received_at',new Date().toISOString()); r.set('payload',body); app.save(r)
-    lib.reconcile(app,server,body)
+    const reconciled=lib.reconcile(app,server,body)
+    require(__hooks+'/lib/alerts.js').evaluateSnapshot(app,server,body,reconciled)
   })
   e.response.header().set('Cache-Control','no-store')
   return e.json(200,{accepted:true,duplicate})

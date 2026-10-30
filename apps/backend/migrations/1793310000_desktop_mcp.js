@@ -1,0 +1,12 @@
+migrate(app=>{
+  const text=(name,max=240,required=false)=>({type:'text',name,max,required})
+  const rel=(name,target)=>({type:'relation',name,collectionId:app.findCollectionByNameOrId(target).id,maxSelect:1,required:true,cascadeDelete:false})
+  const create=(name,fields,indexes=[])=>app.save(new Collection({name,type:'base',listRule:null,viewRule:null,createRule:null,updateRule:null,deleteRule:null,fields:[rel('organization','organizations'),...fields,{type:'autodate',name:'created',onCreate:true,onUpdate:false}],indexes}))
+  const rules=app.findCollectionByNameOrId('alert_rules');rules.fields.add(new NumberField({name:'edit_version',min:0,onlyInt:true}));app.save(rules)
+  app.db().newQuery('UPDATE alert_rules SET edit_version = 1').execute()
+  create('mcp_audit',[text('user',15,true),text('request_id',64,true),text('tool',64,true),text('binding',64,true),text('state',32,true)],['CREATE UNIQUE INDEX idx_mcp_audit_state ON mcp_audit (organization,user,request_id,state)'])
+  create('mcp_receipts',[text('user',15,true),text('request_id',64,true),text('binding',64,true),{type:'json',name:'result',maxSize:262144}],['CREATE UNIQUE INDEX idx_mcp_receipt ON mcp_receipts (organization,user,request_id)'])
+  create('operation_grants',[{...rel('user','users'),cascadeDelete:true},text('action',64,true),text('target',15,true),{type:'bool',name:'enabled'}],['CREATE UNIQUE INDEX idx_operation_grant ON operation_grants (organization,user,action,target)'])
+  create('operation_controllers',[text('principal',64,true),{...text('token_hash',64,true),hidden:true},{type:'bool',name:'enabled'}])
+  create('operation_tickets',[text('user',15,true),text('principal',64,true),text('operation_id',64,true),text('action',64,true),text('target',15,true),{...text('token_hash',64,true),hidden:true},text('approval',64,true),{type:'date',name:'expires_at'},{type:'bool',name:'consumed'}],['CREATE UNIQUE INDEX idx_operation_ticket_hash ON operation_tickets (token_hash)'])
+},app=>{const rules=app.findCollectionByNameOrId('alert_rules');rules.fields.removeByName('edit_version');app.save(rules);for(const name of ['operation_tickets','operation_controllers','operation_grants','mcp_receipts','mcp_audit'])app.delete(app.findCollectionByNameOrId(name))})

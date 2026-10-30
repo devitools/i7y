@@ -1,0 +1,34 @@
+{
+  "brand": "#4f46e5",
+  "critical": "#dc2626",
+  "warning": "#b45309",
+  "info": "#4f46e5",
+  "light": {
+    "background": "#f5f5f6",
+    "surface": "#ffffff",
+    "field": "#e7e7ec",
+    "badge": "#e4e4e7",
+    "text": "#18181b",
+    "muted": "#64646d",
+    "separator": "#dedee3",
+    "outline": "#71717a",
+    "navigation": "#ffffff",
+    "navigation-active": "#e9e7fc",
+    "navigation-active-text": "#4338ca",
+    "positive-text": "#247a4b"
+  },
+  "dark": {
+    "background": "#101012",
+    "surface": "#18181b",
+    "field": "#202023",
+    "badge": "#27272a",
+    "text": "#f4f4f5",
+    "muted": "#a1a1aa",
+    "separator": "#333338",
+    "outline": "#a1a1aa",
+    "navigation": "#18181b",
+    "navigation-active": "#302c49",
+    "navigation-active-text": "#ddd9ff",
+    "positive-text": "#86c5a0"
+  }
+}

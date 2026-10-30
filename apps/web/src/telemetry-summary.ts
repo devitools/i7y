@@ -35,5 +35,14 @@ export function serverStats(telemetry,containers,now=Date.now()) {
   const os=telemetry?.host?.operating_system
   const operatingSystem=os?(os.pretty_name || [os.name,os.version_id].filter(Boolean).join(' ')):''
   const operatingSystemDetails=os?[operatingSystem,os.architecture,os.kernel].filter(Boolean).join(' · '):''
-  return {operatingSystem,operatingSystemDetails,hostOnly:telemetry?.collection_mode==='host',observedAt:telemetry?.observed_at || null,stale:!!telemetry?.observed_at && now-timestamp(telemetry.observed_at)>900000,cpu:Number.isFinite(telemetry?.host?.cpu_percent)?telemetry.host.cpu_percent:null,memory:memoryPercent(telemetry?.host),disk:disks.length?Math.max(...disks):null,healthy:containerSummary(containers).running,total:containers.length}
+  const lastAccess=timestamp(telemetry?.host?.last_rdp_access_at)
+  const windows=os?.family==='windows' || telemetry?.host?.os==='windows'
+  const rdpActive=telemetry?.host?.rdp_session_active
+  const rdpAccessDays=Number.isFinite(lastAccess) && lastAccess<=now?Math.floor((now-lastAccess)/86400000):null
+  return {windows,rdpActive,rdpAccessDays,lastRdpAccessAt:telemetry?.host?.last_rdp_access_at || null,operatingSystem,operatingSystemDetails,hostOnly:telemetry?.collection_mode==='host',observedAt:telemetry?.observed_at || null,stale:!!telemetry?.observed_at && now-timestamp(telemetry.observed_at)>900000,cpu:Number.isFinite(telemetry?.host?.cpu_percent)?telemetry.host.cpu_percent:null,memory:memoryPercent(telemetry?.host),disk:disks.length?Math.max(...disks):null,healthy:containerSummary(containers).running,total:containers.length}
+}
+
+export function containerStateText(record) {
+  const state = record.state || record.telemetry?.state || 'unknown'
+  return ({missing:'Removed',removed:'Removed',running:record.telemetry?.health==='unhealthy'?'Unhealthy':record.telemetry?.health==='starting'?'Starting':'Running',exited:'Stopped',dead:'Dead',paused:'Paused',restarting:'Restarting',created:'Created',removing:'Removing'})[state] || 'Unknown'
 }

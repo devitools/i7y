@@ -13,6 +13,8 @@ export interface ListState {
   statuses?: string[]
 }
 export interface RouteState extends ListState {
+  organization?: string
+  key?: string
   view?: string
   workspace?: string | null
   server?: string | null

@@ -7,10 +7,14 @@ routerUse(new Middleware((e) => {
   catch (_) { throw new UnauthorizedError('Invalid API token') }
   if (Date.parse(record.getString('expires_at').replace(' ','T')) <= Date.now()) throw new UnauthorizedError('Expired API token')
   const path = e.request.url.path
-  if (path !== '/api/i7y/token' && !/^\/api\/collections\/(workspaces|servers|projects|containers)\/records(?:\/[a-z0-9]{15})?$/.test(path)) throw new ForbiddenError('API tokens only access inventory records')
   const method = e.request.method
+  const alertAccess=require(__hooks+'/lib/alert-capabilities.js')
+  const capability=alertAccess.forRoute(method,path)
+  const alertRoute=path.startsWith('/api/i7y/alerts/')
+  if (alertRoute && (!capability || !alertAccess.capabilities(record).includes(capability))) throw new ForbiddenError('Token capability required')
+  if (!alertRoute && path !== '/api/i7y/token' && !/^\/api\/collections\/(workspaces|servers|projects|containers)\/records(?:\/[a-z0-9]{15})?$/.test(path)) throw new ForbiddenError('API token route is not allowed')
   if (path === '/api/i7y/token' && method !== 'GET') throw new ForbiddenError('Only token inspection is allowed')
-  if (!['GET','POST','PATCH','DELETE'].includes(method) || (method !== 'GET' && record.getString('scope') !== 'write')) throw new ForbiddenError('This token only allows reading inventory')
+  if (!alertRoute && (!['GET','POST','PATCH','DELETE'].includes(method) || (method !== 'GET' && record.getString('scope') !== 'write'))) throw new ForbiddenError('This token only allows reading inventory')
   try { e.auth = e.app.findRecordById('users',record.getString('user')) }
   catch (_) { throw new UnauthorizedError('Invalid API token') }
   const org=record.getString('organization')
@@ -18,7 +22,7 @@ routerUse(new Middleware((e) => {
   if(selected && selected!==org)throw new ForbiddenError('Token organization mismatch')
   e.request.header.set('X-I7y-Organization',org)
   e.requestInfo().headers['x_i7y_organization']=org
-  require(__hooks+'/lib/organizations.js').requireRole(e,org,method!=='GET')
+  require(__hooks+'/lib/organizations.js').requireRole(e,org,alertRoute?!capability.endsWith(':read'):method!=='GET')
   e.set('i7yApiToken',record)
   return e.next()
 }, -1001))
@@ -33,7 +37,9 @@ routerAdd('GET','/api/i7y/tokens',(e) => {
 routerAdd('POST','/api/i7y/tokens',(e) => {
   const body = e.requestInfo().body
   const organization=String(body.organization || e.request.header.get('X-I7y-Organization') || '')
-  require(__hooks+'/lib/organizations.js').requireRole(e,organization,body.scope==='write')
+  let capabilities
+  try {capabilities=require(__hooks+'/lib/alert-capabilities.js').normalize(body.capabilities)} catch (_) {throw new BadRequestError('Invalid alert capabilities')}
+  require(__hooks+'/lib/organizations.js').requireRole(e,organization,body.scope==='write' || capabilities.some(value=>!value.endsWith(':read')))
   const label = String(body.label || '').trim()
   const days = Number(body.days)
   const scope = body.scope
@@ -48,6 +54,7 @@ routerAdd('POST','/api/i7y/tokens',(e) => {
   record.set('token_hash',$security.sha256(token))
   record.set('prefix',token.slice(0,12))
   record.set('scope',scope)
+  record.set('capabilities',capabilities)
   record.set('expires_at',new Date(Date.now() + days * 86400000).toISOString())
   e.app.save(record)
   e.response.header().set('Cache-Control','no-store')

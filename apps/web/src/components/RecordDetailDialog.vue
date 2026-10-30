@@ -6,7 +6,7 @@
           {{ avatarText }}
         </q-avatar>
 
-        <div class="q-ml-sm">
+        <div class="q-ml-sm record-detail-heading">
           <div class="text-subtitle1 text-weight-medium">{{ title }}</div>
           <div v-if="subtitle" class="text-caption text-grey-5">{{ subtitle }}</div>
         </div>
@@ -22,10 +22,10 @@
         <div
           v-for="field in fields"
           :key="field.label"
-          class="row justify-between items-center q-py-xs"
+          class="record-detail-field q-py-xs"
         >
           <div class="text-caption text-grey-5">{{ field.label }}</div>
-          <div class="text-weight-medium" :class="field.color ? `text-${field.color}` : ''">
+          <div class="text-weight-medium record-detail-value" :class="field.color ? `text-${field.color}` : ''">
             {{ field.value }}
           </div>
         </div>
@@ -65,7 +65,13 @@ defineProps<{
 
 <style scoped>
 .record-detail-card {
-  width: 380px;
+  width: 520px;
   max-width: 90vw;
 }
+.record-detail-heading{min-width:0;overflow-wrap:anywhere}
+.record-detail-card :deep(.q-avatar),.record-detail-card :deep(.q-card__section>.q-btn){flex-shrink:0}
+.record-detail-field{display:grid;grid-template-columns:minmax(96px,.8fr) minmax(0,1.2fr);gap:4px 16px;align-items:baseline}
+.record-detail-value{min-width:0;overflow-wrap:anywhere;text-align:right}
+.record-detail-card :deep(.q-card__actions){flex-wrap:wrap;gap:8px}
+@media(max-width:480px){.record-detail-field{grid-template-columns:minmax(0,1fr);padding-block:8px}.record-detail-value{text-align:left}}
 </style>

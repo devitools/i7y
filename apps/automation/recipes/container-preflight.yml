@@ -1,0 +1,15 @@
+---
+- name: Inspect container before operation review
+  hosts: all
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Read immutable container identity and state
+      ansible.builtin.include_tasks: container-observe.yml
+    - name: Save observed state on the controller
+      ansible.builtin.copy:
+        dest: '{{ i7y_preflight_output }}'
+        content: '{{ i7y_observed_container | to_json }}'
+        mode: '0600'
+      delegate_to: localhost
+      run_once: true

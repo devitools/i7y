@@ -7,7 +7,7 @@ Authenticated infrastructure inventory and telemetry, built with Vue, Quasar, Po
 - `apps/web`: Vue/Quasar interface, built with Vite.
 - `apps/backend`: PocketBase hooks and database migrations.
 - `apps/agent`: Linux and Windows telemetry collectors.
-- `apps/desktop`: reserved for Tauri/Rust, sharing the web interface.
+- `apps/desktop`: Tauri/Rust native shell sharing the web interface.
 - `apps/automation`: reserved for SSH-controlled automation.
 - `deploy`: deployment templates for the product.
 - `docs`: API and installation documentation.
@@ -43,6 +43,16 @@ The frontend uses TypeScript, including Vue script blocks and Vite configuration
 The web workspace owns frontend dependencies; the root npm workspace owns the shared lockfile. Go and Rust keep their own toolchains. A new database starts without infrastructure inventory. See [authentication](docs/api-auth.md) to create the first user through trusted local administration. Existing database contents are preserved.
 
 `VITE_POCKETBASE_URL` configures the frontend API endpoint at build time and defaults to the same origin. The development proxy targets port 8097. If you override `INVENTORY_PORT`, also configure `VITE_POCKETBASE_URL` for that backend. The optional backend `INVENTORY_FILE` enables an explicitly mounted private legacy import; normal operation does not require it.
+
+## Desktop development
+
+See [desktop setup](apps/desktop/README.md) for Rust/platform prerequisites and backend configuration. Run the app and enter the URL of your i7y installation on its sign-in screen:
+
+```sh
+npm run desktop:dev
+```
+
+The desktop reuses the same frontend through a separate Vite server on port 5178. It does not start or deploy a backend. Native SSH and 1Password operations are not implemented yet.
 
 ## Production image
 

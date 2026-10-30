@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useQuasar } from 'quasar'
 import { management } from '../api'
 import { t, locale } from '../i18n'
+import PageHeader from './PageHeader.vue'
 import { routeHash } from '../routes'
 import { guideBlocks, guideText } from '../agent-guide'
 import ptGuide from '../locales/pt-BR/agent-installation.md?raw'
@@ -15,11 +16,11 @@ const telemetry=computed(()=>routeHash({view:'telemetry',server:props.serverId})
 const back=computed(()=>server.value?routeHash({view:'projects',server:server.value.id}):'#/servers')
 const blocks=computed(()=>guideBlocks((guides[locale.value] || enGuide).replaceAll('https://inventory.example.com',window.location.origin).replaceAll('server.example.com',server.value?.ip || 'server.example.com')))
 async function copy(text){try{await navigator.clipboard.writeText(text);q.notify({message:t('Copied to clipboard'),color:'positive'})}catch{q.notify({message:t('Unable to copy'),color:'negative'})}}
-onMounted(async()=>{try{server.value=await management.get('servers',props.serverId)}catch{error.value=t('Unable to load the inventory. Check that PocketBase is running and try again.')}finally{loading.value=false}})
+onMounted(async()=>{try{server.value=await management.get('servers',props.serverId)}catch{error.value=t('Unable to load data. Please try again.')}finally{loading.value=false}})
 </script>
 <template>
 <q-page class="q-pa-md inventory-page">
- <div class="page-heading"><div><h1>{{t('Install daemon')}}</h1><p v-if="server" class="text-grey-7 q-mb-none">{{server.name}} · {{server.ip}}</p></div><q-btn flat no-caps icon="arrow_back" :label="t('Back to server')" :href="back" /></div>
+ <PageHeader :title="t('Install daemon')" :breadcrumbs="[{label:t('Projects'),href:back}]" />
  <q-spinner v-if="loading" color="primary" />
  <q-banner v-else-if="error" class="bg-negative text-white" role="alert">{{error}}</q-banner>
  <template v-else>
@@ -36,5 +37,5 @@ onMounted(async()=>{try{server.value=await management.get('servers',props.server
 </q-page>
 </template>
 <style scoped>
-.agent-guide{max-width:1000px;line-height:1.7}.agent-guide h2{font-size:22px;line-height:1.4;margin:0 0 20px}.agent-guide h3{font-size:18px;line-height:1.4;margin:32px 0 16px}.guide-code{position:relative;background:rgba(127,127,127,.09);border-radius:8px;margin:16px 0}.guide-code .q-btn{position:absolute;right:8px;top:8px}.guide-code pre{overflow:auto;padding:20px 52px 20px 16px;line-height:1.6;font-size:13px;margin:0}.guide-item{margin:6px 0;padding-left:16px;border-left:2px solid var(--q-primary)}.agent-guide p code,.agent-guide td code{overflow-wrap:anywhere;font-size:.9em}
+.agent-guide{width:100%;line-height:1.7}.agent-guide h2{font-size:22px;line-height:1.4;margin:0 0 20px}.agent-guide h3{font-size:18px;line-height:1.4;margin:32px 0 16px}.guide-code{position:relative;background:rgba(127,127,127,.09);border-radius:8px;margin:16px 0}.guide-code .q-btn{position:absolute;right:8px;top:8px}.guide-code pre{overflow:auto;padding:20px 52px 20px 16px;line-height:1.6;font-size:13px;margin:0}.guide-item{margin:6px 0;padding-left:16px;border-left:2px solid var(--q-primary)}.agent-guide p code,.agent-guide td code{overflow-wrap:anywhere;font-size:.9em}
 </style>

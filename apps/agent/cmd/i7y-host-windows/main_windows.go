@@ -49,7 +49,7 @@ func cpuTimes() (uint64, uint64, bool) {
 	return ticks(idle), ticks(kernel) + ticks(user), ok != 0
 }
 func collect() map[string]any {
-	host := map[string]any{"os": "windows", "operating_system": operatingSystemInfo(), "cpu_percent": nil, "memory_total_bytes": nil, "memory_available_bytes": nil, "uptime_seconds": nil, "load": nil, "disks": []any{}, "rdp_session_active": rdpSessionActive()}
+	host := map[string]any{"os": "windows", "operating_system": operatingSystemInfo(), "cpu_percent": nil, "memory_total_bytes": nil, "memory_available_bytes": nil, "uptime_seconds": nil, "load": nil, "disks": []any{}, "rdp_session_active": rdpSessionActive(), "last_rdp_access_at": lastRDPAccess()}
 	notices := []string{}
 	idle, total, ok := cpuTimes()
 	time.Sleep(time.Second)

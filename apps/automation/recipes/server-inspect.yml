@@ -1,0 +1,28 @@
+---
+- name: Inspect server runtime
+  hosts: all
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Read kernel and architecture
+      ansible.builtin.command:
+        argv: [uname, -smr]
+      register: i7y_kernel
+      changed_when: false
+    - name: Read uptime
+      ansible.builtin.command:
+        argv: [cat, /proc/uptime]
+      register: i7y_uptime
+      changed_when: false
+    - name: Return server summary
+      ansible.builtin.debug:
+        msg:
+          kernel: '{{ i7y_kernel.stdout }}'
+          uptime_seconds: '{{ i7y_uptime.stdout.split()[0] | float }}'
+    - name: Persist bounded inspection evidence on the controller
+      ansible.builtin.copy:
+        dest: '{{ i7y_result_output }}'
+        mode: '0600'
+        content: '{{ {"kernel": i7y_kernel.stdout, "uptime_seconds": i7y_uptime.stdout.split()[0] | float} | to_json }}'
+      delegate_to: localhost
+      when: i7y_result_output is defined

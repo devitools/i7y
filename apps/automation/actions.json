@@ -1,0 +1,195 @@
+{
+  "version": 1,
+  "actions": [
+    {
+      "id": "server.ping",
+      "target": "server",
+      "permission": "read",
+      "recipe": "server-ping.yml",
+      "legacy": null,
+      "title": "Ansible ping",
+      "status": "read-only-connectivity-check",
+      "enabled": false
+    },
+    {
+      "id": "server.inspect",
+      "target": "server",
+      "permission": "read",
+      "recipe": "server-inspect.yml",
+      "legacy": "info/server",
+      "title": "Inspect server",
+      "status": "replacement-tested-locally",
+      "enabled": false
+    },
+    {
+      "id": "server.disk",
+      "target": "server",
+      "permission": "read",
+      "recipe": "server-disk.yml",
+      "legacy": "info/df",
+      "title": "Inspect disk usage",
+      "status": "replacement-tested-locally",
+      "enabled": false
+    },
+    {
+      "id": "project.list",
+      "target": "server",
+      "permission": "read",
+      "recipe": null,
+      "legacy": "info/projects",
+      "title": "List projects",
+      "status": "rewrite-required",
+      "enabled": false
+    },
+    {
+      "id": "container.list",
+      "target": "server",
+      "permission": "read",
+      "recipe": "container-list.yml",
+      "legacy": null,
+      "title": "List containers",
+      "status": "replacement-tested-locally",
+      "enabled": false
+    },
+    {
+      "id": "project.copy",
+      "target": "project",
+      "permission": "write",
+      "recipe": null,
+      "legacy": null,
+      "title": "Copy project",
+      "status": "implementation-required",
+      "enabled": false
+    },
+    {
+      "id": "container.start",
+      "target": "container",
+      "permission": "write",
+      "recipe": "container-start.yml",
+      "legacy": null,
+      "title": "Start container",
+      "status": "recipe-tested-locally",
+      "enabled": false
+    },
+    {
+      "id": "container.stop",
+      "target": "container",
+      "permission": "write",
+      "recipe": "container-stop.yml",
+      "legacy": null,
+      "title": "Stop container",
+      "status": "recipe-tested-locally",
+      "enabled": false
+    },
+    {
+      "id": "container.restart",
+      "target": "container",
+      "permission": "write",
+      "recipe": "container-restart.yml",
+      "legacy": null,
+      "title": "Restart container",
+      "status": "recipe-tested-locally",
+      "enabled": false
+    },
+    {
+      "id": "host.update",
+      "target": "server",
+      "permission": "admin",
+      "recipe": null,
+      "legacy": "maintenance/centos-update",
+      "title": "Update operating system",
+      "status": "rewrite-required",
+      "enabled": false
+    },
+    {
+      "id": "host.update-amazon",
+      "target": "server",
+      "permission": "admin",
+      "recipe": null,
+      "legacy": "maintenance/amazon-update",
+      "title": "Update Amazon Linux",
+      "status": "rewrite-required",
+      "enabled": false
+    },
+    {
+      "id": "proxy.pull",
+      "target": "server",
+      "permission": "admin",
+      "recipe": null,
+      "legacy": "maintenance/tevun-pull",
+      "title": "Pull proxy images",
+      "status": "rewrite-required",
+      "enabled": false
+    },
+    {
+      "id": "proxy.update",
+      "target": "server",
+      "permission": "admin",
+      "recipe": null,
+      "legacy": "maintenance/tevun-update",
+      "title": "Update reverse proxy",
+      "status": "rewrite-required",
+      "enabled": false
+    },
+    {
+      "id": "host.shell-configure",
+      "target": "server",
+      "permission": "admin",
+      "recipe": null,
+      "legacy": "setup/bashrc",
+      "title": "Configure shell profile",
+      "status": "rewrite-required",
+      "enabled": false
+    },
+    {
+      "id": "host.docker-install",
+      "target": "server",
+      "permission": "admin",
+      "recipe": null,
+      "legacy": "setup/docker",
+      "title": "Install Docker",
+      "status": "rewrite-required",
+      "enabled": false
+    },
+    {
+      "id": "host.storage-client-install",
+      "target": "server",
+      "permission": "admin",
+      "recipe": null,
+      "legacy": "setup/mc",
+      "title": "Install storage client",
+      "status": "rewrite-required",
+      "enabled": false
+    },
+    {
+      "id": "host.ssh-configure",
+      "target": "server",
+      "permission": "admin",
+      "recipe": null,
+      "legacy": "setup/ssh",
+      "title": "Configure SSH access",
+      "status": "rewrite-required",
+      "enabled": false
+    },
+    {
+      "id": "host.proxy-install",
+      "target": "server",
+      "permission": "admin",
+      "recipe": null,
+      "legacy": "setup/tevun",
+      "title": "Install reverse proxy",
+      "status": "rewrite-required",
+      "enabled": false
+    },
+    {
+      "id": "host.timezone-configure",
+      "target": "server",
+      "permission": "admin",
+      "recipe": null,
+      "legacy": "setup/timezone",
+      "title": "Configure timezone",
+      "status": "rewrite-required",
+      "enabled": false
+    }
+  ]
+}
