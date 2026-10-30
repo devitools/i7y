@@ -1,0 +1,67 @@
+name: Deploy i7y site
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/site/**'
+      - '.github/deploy/**'
+      - '.github/workflows/site-deploy.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: i7y-site-production
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Validate static pages
+        run: |
+          set -eu
+          for page in index.html support/index.html privacy/index.html pt/index.html pt/support/index.html pt/privacy/index.html; do
+            test -s "apps/site/$page"
+          done
+      - name: Validate deploy configuration
+        env:
+          DEPLOY_REMOTE: ${{ secrets.DEPLOY_SITE_REMOTE }}
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SERVER_PRIVATE_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -eu
+          test -n "$DEPLOY_REMOTE" && test -n "$DEPLOY_KEY" && test -n "$DEPLOY_KNOWN_HOSTS" || {
+            echo 'Configure DEPLOY_SITE_REMOTE, DEPLOY_SERVER_PRIVATE_KEY, and DEPLOY_KNOWN_HOSTS before deploying.' >&2
+            exit 1
+          }
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SERVER_PRIVATE_KEY }}
+      - name: Configure trusted host keys
+        env:
+          DEPLOY_KNOWN_HOSTS: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+      - name: Publish site snapshot to Tevun
+        env:
+          DEPLOY_REMOTE: ${{ secrets.DEPLOY_SITE_REMOTE }}
+        run: |
+          set -eu
+          snapshot="$(mktemp -d)"
+          mkdir -p "$snapshot/public"
+          cp -R apps/site/index.html apps/site/styles.css apps/site/theme.js apps/site/product-demo.js apps/site/assets apps/site/support apps/site/privacy apps/site/pt "$snapshot/public/"
+          cp .github/deploy/i7y-site-compose.yml "$snapshot/docker-compose.yml"
+          mkdir -p "$snapshot/.tevun/hooks"
+          cp .github/deploy/tevun/hooks/*.sh "$snapshot/.tevun/hooks/"
+          cd "$snapshot"
+          git init -q
+          git config user.name 'GitHub Actions'
+          git config user.email 'ci@devi.tools'
+          git add public docker-compose.yml .tevun
+          git commit -qm "Deploy site ${GITHUB_SHA}"
+          git remote add production "$DEPLOY_REMOTE"
+          git push --force production HEAD:refs/heads/main
