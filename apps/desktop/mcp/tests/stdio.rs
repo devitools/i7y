@@ -107,12 +107,15 @@ mod fixture {
             directory.join("i7y-desktop")
         );
         let mode = std::env::var("I7Y_STDIO_TEST_MODE").unwrap();
-        assert!(["roundtrip", "malformed"].contains(&mode.as_str()));
+        assert!(["roundtrip", "malformed", "reconnect", "uncertain"].contains(&mode.as_str()));
         let endpoint = i7y_mcp::socket_path();
         std::fs::create_dir_all(endpoint.parent().unwrap()).unwrap();
         let listener = UnixListener::bind(endpoint).unwrap();
         listener.set_nonblocking(true).unwrap();
         std::fs::write(directory.join("ready"), b"ready").unwrap();
+        let mut transcript = Vec::new();
+        let rounds = if ["reconnect", "uncertain"].contains(&mode.as_str()) { 2 } else { 1 };
+        for round in 0..rounds {
         let started = Instant::now();
         let (mut socket, _) = loop {
             match listener.accept() {
@@ -129,7 +132,6 @@ mod fixture {
             .set_read_timeout(Some(Duration::from_secs(10)))
             .unwrap();
         let mut reader = BufReader::new(socket.try_clone().unwrap());
-        let mut transcript = Vec::new();
         loop {
             let mut line = String::new();
             if reader.read_line(&mut line).unwrap() == 0 {
@@ -144,18 +146,45 @@ mod fixture {
                 let _ = reader.read_line(&mut String::new());
                 break;
             }
+            if mode == "uncertain" && round == 0 && value["method"] == "call" { break; }
             let response = if value["method"] == "connect" {
                 json!({"state":"approval_required","request_id":"request"})
             } else {
                 json!({"authorized":false})
             };
             writeln!(socket, "{response}").unwrap();
+            if mode == "reconnect" && round == 0 && value["method"] == "call" {
+                socket.shutdown(std::net::Shutdown::Both).unwrap();
+                std::fs::write(directory.join("disconnected"), b"yes").unwrap();
+                break;
+            }
+        }
         }
         std::fs::write(
             directory.join("transcript.json"),
             serde_json::to_vec(&transcript).unwrap(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn initialization_and_tool_discovery_work_without_desktop() {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_i7y-mcp"))
+            .env("TMPDIR", "/tmp/i7y-absent-stdio-test")
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        let mut input = child.stdin.take().unwrap();
+        for request in [
+            json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"fixture"}}}),
+            json!({"id":2,"method":"tools/list"}),
+            json!({"id":3,"method":"tools/call","params":{"name":"connection_status","arguments":{}}}),
+        ] { writeln!(input, "{request}").unwrap(); }
+        drop(input);
+        let output = child.wait_with_output().unwrap();
+        let rows: Vec<Value> = String::from_utf8(output.stdout).unwrap().lines()
+            .map(|line| serde_json::from_str(line).unwrap()).collect();
+        assert!(rows[0].get("result").is_some());
+        assert!(rows[1]["result"]["tools"].is_array());
+        assert!(rows[2].get("error").is_some());
     }
 
     #[test]
@@ -215,10 +244,68 @@ mod fixture {
             .map(|line| serde_json::from_str(line).unwrap())
             .collect();
         assert_eq!(rows.len(), 2);
-        assert!(rows.iter().all(|row| row.get("error").is_some()));
+        assert!(rows[0].get("result").is_some());
+        assert!(rows[1].get("error").is_some());
         assert!(!text.contains("stale-tool-result"));
         let transcript = desktop.transcript();
         assert_eq!(transcript.len(), 1);
         assert_eq!(transcript[0]["method"], "connect");
     }
+    #[test]
+    fn idle_desktop_disconnect_reconnects_with_a_new_handshake() {
+        let mut desktop = Desktop::start("reconnect");
+        let mut child = desktop.connector();
+        let mut input = child.stdin.take().unwrap();
+        let mut output = BufReader::new(child.stdout.take().unwrap());
+        writeln!(input,"{}",json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"fixture"}}})).unwrap();
+        let mut line = String::new();
+        output.read_line(&mut line).unwrap();
+        assert!(serde_json::from_str::<Value>(&line).unwrap().get("result").is_some());
+        writeln!(input,"{}",json!({"id":2,"method":"tools/call","params":{"name":"connection_status","arguments":{}}})).unwrap();
+        line.clear();
+        output.read_line(&mut line).unwrap();
+        assert!(serde_json::from_str::<Value>(&line).unwrap().get("result").is_some());
+        let started = Instant::now();
+        while !desktop.directory.join("disconnected").exists() {
+            assert!(started.elapsed() < Duration::from_secs(10));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        writeln!(input,"{}",json!({"id":3,"method":"tools/call","params":{"name":"connection_status","arguments":{}}})).unwrap();
+        line.clear();
+        output.read_line(&mut line).unwrap();
+        assert!(serde_json::from_str::<Value>(&line).unwrap().get("result").is_some(), "{line}");
+        drop(input);
+        assert!(child.wait().unwrap().success());
+        let transcript = desktop.transcript();
+        assert_eq!(transcript.len(), 4);
+        assert_eq!(transcript[0]["method"], "connect");
+        assert_eq!(transcript[1]["name"], "connection_status");
+        assert_eq!(transcript[2]["method"], "connect");
+        assert_eq!(transcript[3]["name"], "connection_status");
+    }
+
+    #[test]
+    fn uncertain_mutation_is_not_replayed_after_reconnection() {
+        let mut desktop = Desktop::start("uncertain");
+        let mut child = desktop.connector();
+        let mut input = child.stdin.take().unwrap();
+        let mut output = BufReader::new(child.stdout.take().unwrap());
+        for (id, method, params) in [
+            (1,"initialize",json!({"clientInfo":{"name":"fixture"}})),
+            (2,"tools/call",json!({"name":"create_incident","arguments":{"title":"Test","severity":"info"}})),
+            (3,"tools/call",json!({"name":"connection_status","arguments":{}})),
+        ] {
+            writeln!(input,"{}",json!({"id":id,"method":method,"params":params})).unwrap();
+            let mut line = String::new();
+            output.read_line(&mut line).unwrap();
+            let reply: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(reply.get("error").is_some(), id == 2, "{line}");
+        }
+        drop(input);
+        assert!(child.wait().unwrap().success());
+        let transcript = desktop.transcript();
+        assert_eq!(transcript.iter().filter(|v| v["name"] == "create_incident").count(), 1);
+        assert_eq!(transcript.iter().filter(|v| v["method"] == "connect").count(), 2);
+    }
+
 }
