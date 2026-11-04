@@ -47,6 +47,8 @@ class MysqlBackup(unittest.TestCase):
     def test_independent_restore_and_unsupported_schema_rejection(self):
         self.sql("CREATE TABLE wp_options (id INT PRIMARY KEY, value LONGBLOB) ENGINE=InnoDB;"
                  "INSERT INTO wp_options VALUES (1, UNHEX('000102ff'));"
+                 "CREATE TABLE transient_cache (id INT PRIMARY KEY) ENGINE=MEMORY;"
+                 "INSERT INTO transient_cache VALUES (7);"
                  "CREATE DATABASE destination_site;")
         backup = self.backup()
         self.assertEqual(backup.returncode, 0, backup.stderr.decode())

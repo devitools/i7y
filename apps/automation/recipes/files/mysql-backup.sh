@@ -24,7 +24,7 @@ esac
 
 shape=$(query "SELECT CONCAT(
     (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE'), ':',
-    (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND (TABLE_TYPE <> 'BASE TABLE' OR ENGINE IS NULL OR ENGINE <> 'InnoDB')), ':',
+    (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND (TABLE_TYPE <> 'BASE TABLE' OR ENGINE IS NULL OR ENGINE NOT IN ('InnoDB', 'MEMORY'))), ':',
     (SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE()), ':',
     (SELECT COUNT(*) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = DATABASE()), ':',
     (SELECT COUNT(*) FROM information_schema.EVENTS WHERE EVENT_SCHEMA = DATABASE()))") || exit 66
@@ -37,8 +37,15 @@ case "$tables" in
     ''|0|*[!0-9]*) exit 68 ;;
 esac
 
+memory=$(query "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND ENGINE = 'MEMORY'") || exit 66
+if [ "$memory" = 0 ]; then
+    set -- --single-transaction --skip-lock-tables
+else
+    set -- --lock-all-tables
+fi
+
 exec mysqldump --no-defaults --protocol=socket --user=root \
-    --single-transaction --quick --skip-lock-tables --hex-blob \
+    "$@" --quick --hex-blob \
     --set-gtid-purged=OFF --no-create-db --skip-add-locks \
     --skip-comments --skip-dump-date --routines=false --events=false \
     --triggers=false -- "$MYSQL_DATABASE" 2>/dev/null

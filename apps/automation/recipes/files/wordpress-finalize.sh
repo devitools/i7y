@@ -7,27 +7,38 @@ destination_domain=$3
 database_host=$4
 domain "$source_domain" && domain "$destination_domain" || exit 64
 [ "$source_domain" != "$destination_domain" ] || exit 64
-[ -f "$root/wp-content/mu-plugins/000-i7y-clone-guard.php" ] || exit 66
 [ "$(wp config get DB_HOST)" = "$database_host" ] || exit 66
 [ "$(wp config get I7Y_CLONE_REVIEW_REQUIRED --format=json)" = true ] || exit 66
+restore_quarantine() {
+    for entry in mu-plugins db.php object-cache.php advanced-cache.php sunrise.php; do
+        if [ -e "/opt/i7y/state/quarantine/$entry" ]; then
+            [ ! -e "$root/wp-content/$entry" ] || exit 66
+            mv "/opt/i7y/state/quarantine/$entry" "$root/wp-content/$entry"
+        fi
+    done
+}
+if php -r '$p="/opt/i7y/state/domain-contract.json"; $v=is_file($p)?json_decode(file_get_contents($p),true):null; exit(is_array($v) && ($v["verified"]??false)===true && ($v["source"]??null)===$argv[1] && ($v["destination"]??null)===$argv[2] && !is_file("/opt/i7y/state/temporary-columns.json") ? 0 : 1);' "$source_domain" "$destination_domain"; then
+    restore_quarantine
+    exit 0
+fi
 wp core is-installed
+wp eval-file /opt/i7y/tools/wordpress-domain-contract.php begin "$source_domain" "$destination_domain"
+trap 'wp eval-file /opt/i7y/tools/wordpress-database-check.php cleanup' EXIT
 wp eval-file /opt/i7y/tools/wordpress-database-check.php
 for option in home siteurl; do
     value=$(wp option get "$option")
     case "$value" in
-        "http://$source_domain"|"https://$source_domain"|"http://www.$source_domain"|"https://www.$source_domain") ;;
+        "https://$destination_domain"|"http://$destination_domain"|"http://$source_domain"|"https://$source_domain"|"http://www.$source_domain"|"https://www.$source_domain") ;;
         *) exit 67 ;;
     esac
 done
 new_url="https://$destination_domain"
-escaped_source=$(php -r 'echo preg_quote($argv[1], "~");' "$source_domain")
-wp search-replace "(?:https?://|//)(?:www\\.)?$escaped_source(?![a-z0-9.-])" "$new_url" \
-    --regex --regex-flags=i --all-tables --precise --skip-columns=guid --report-changed-only --quiet
+wp eval-file /opt/i7y/tools/wordpress-domain-replace.php "$source_domain" "$destination_domain"
 wp option update home "$new_url"
 wp option update siteurl "$new_url"
-wp option update active_plugins '[]' --format=json
-wp option update blog_public 0
-if wp option get cron >/dev/null; then wp option delete cron; fi
 [ "$(wp option get home)" = "$new_url" ] || exit 68
 [ "$(wp option get siteurl)" = "$new_url" ] || exit 68
-[ "$(wp option get active_plugins --format=json)" = '[]' ] || exit 68
+wp eval-file /opt/i7y/tools/wordpress-database-check.php cleanup
+wp eval-file /opt/i7y/tools/wordpress-domain-contract.php verify "$source_domain" "$destination_domain"
+trap - EXIT
+restore_quarantine

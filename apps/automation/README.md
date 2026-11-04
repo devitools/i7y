@@ -1,4 +1,12 @@
-# Automation controller
+# Automation
+
+The current desktop direction uses SSH directly to Ansible. The declarative catalog,
+playbooks and project-copy implementation are in [ansible/](ansible/README.md).
+They do not require installing the Rust executor described below. The initial
+connectivity pilot is validated end to end; project copy must pass disposable
+integration tests and a reviewed server preview before any live copy is approved.
+
+## Previous controller prototype
 
 `i7y-automation` is a Rust executor on the automation host. It accepts one bounded
 JSON request over SSH stdin and returns JSON on stdout. It opens no network port.
@@ -261,24 +269,14 @@ The initial adapter rejects multisite, custom content/plugin directories, databa
 drop-in layouts declared through `SUNRISE`, and missing standard database constants.
 It moves existing must-use plugins and database/cache drop-ins into the private
 operation quarantine before bootstrapping WordPress. It rewrites database constants
-to the destination credentials, rotates authentication salts, disables cron,
-automatic updates and WordPress HTTP requests, and installs a must-use mail/HTTP
-guard. The originals remain in the copied files' backup and operation quarantine.
+to the destination credentials and rotates authentication salts. Quarantined
+components are restored after URL replacement; plugins, theme settings, cron and
+application integrations are preserved in the finished copy.
 
-After restoration, finalization verifies that both site URLs match the selected
-source domain and that every table has a primary key. WP-CLI would otherwise skip
-tables without a primary key during replacement. It replaces URL authorities in one
-serialization-aware pass, preserves GUIDs, normalizes copied site URLs to HTTPS,
-disables active plugins and indexing, and removes the copied cron queue. Domains
-that merely share a suffix are not replaced; a destination containing the source
-name is not repeatedly rewritten. Original database options remain unchanged.
-
-The copy remains a staging installation pending review. Network isolation is still
-mandatory while preparing it: WordPress hooks do not block arbitrary PHP sockets or
-direct cURL calls. Plugins, outbound integrations and scheduled work must only be
-enabled after explicit review. A theme that depends on disabled plugins may require
-adjustment before application health checks can pass. The controller pipeline and
-desktop review must report that state rather than declaring a public site ready.
+After restoration, finalization verifies the site URLs and table primary keys.
+It replaces URL authorities in a serialization-aware pass, preserves GUIDs and
+normalizes copied site URLs to HTTPS. Domains that merely share a suffix are not
+replaced. Original database options remain unchanged.
 
 The disposable integration test uses WordPress 6.8.3 as a pinned fixture, not as a
 recommended production upgrade. Fetch fixture assets into the ignored directory:
@@ -292,7 +290,7 @@ python3 tests/wordpress-copy.integration.py
 
 The test checks both asset hashes before execution, creates an internal Docker
 network without published ports, verifies serialized values, GUID preservation,
-source database preservation, plugin isolation, explicit mail/HTTP guards, and
+source database preservation, active plugin preservation, restored drop-ins, and
 rejection of modified tools, unsupported configuration and tables without primary
 keys. It removes its own containers, network and temporary files.
 

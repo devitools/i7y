@@ -57,9 +57,8 @@
         <div class="q-px-md q-py-sm"><q-toggle v-model="onlyWithServers" :label="t('Only workspaces with servers')" :dark="dark" dense size="xs" class="workspace-toggle" /></div>
         <div class="workspace-scroll" tabindex="0" role="region" :aria-label="t('Your workspaces')"><q-list>
         <q-item v-for="workspace in workspaces" :key="workspace.login" clickable dense class="app-drawer__item app-drawer__workspace" :active="activeWorkspace===workspace.login" active-class="app-drawer__workspace--active" @click="selectWorkspace(workspace.login)">
-          <q-item-section avatar class="app-drawer__item-icon"><q-icon name="dns" size="18px" /></q-item-section>
-          <q-item-section class="text-body2 ellipsis" :title="workspace.login">{{workspace.login}}</q-item-section>
-          <q-item-section side class="text-grey-6 text-caption">{{workspace.count}}</q-item-section>
+          <q-item-section class="workspace-name text-body2"><span :title="workspace.login">{{workspace.login}}</span></q-item-section>
+          <q-item-section side class="workspace-count"><q-badge class="workspace-count-badge">{{workspace.count}}</q-badge></q-item-section>
         </q-item>
         <q-item v-if="moreWorkspaces" clickable @click="emit('more-workspaces')"><q-item-section>{{t('Load more')}}</q-item-section></q-item>
       </q-list></div>
@@ -145,6 +144,7 @@ function selectWorkspace(login) { emit('workspace',login); if(compactNavigation.
 }
 
 .app-drawer__workspace--active{background:var(--i7y-navigation-active);color:var(--i7y-navigation-active-text)}
+.workspace-name{min-width:0}.workspace-name span{display:block;width:100%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:18px}.app-drawer__workspace{padding:8px 4px 8px 16px}.workspace-count{flex-shrink:0;padding-left:8px}.workspace-count-badge{min-width:24px;justify-content:center;background:var(--i7y-badge);color:var(--i7y-muted);font-size:11px;line-height:16px;border-radius:6px}.app-drawer__workspace--active .workspace-count-badge{background:var(--i7y-navigation-active);color:var(--i7y-navigation-active-text)}
 .workspace-toggle {font-size:11px}
 .backend-state {font-size:12px;color:#71717a;display:flex;align-items:center;gap:6px}
 .backend-state i {width:6px;height:6px;border-radius:50%;background:var(--i7y-positive-text)}

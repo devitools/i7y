@@ -22,6 +22,8 @@ elif os.environ.get("TEST_QUERY_FAIL"):
     sys.exit(1)
 elif "--execute=SELECT @@version" in sys.argv:
     print(os.environ.get("TEST_VERSION", "5.7.44"))
+elif any("ENGINE = 'MEMORY'" in arg for arg in sys.argv):
+    print(os.environ.get("TEST_MEMORY", "0"))
 else:
     print(os.environ.get("TEST_SHAPE", "12:0:0:0:0"))
 '''
@@ -56,6 +58,12 @@ class Backup(unittest.TestCase):
             self.assertNotIn("secret-for-test", " ".join(call["args"]))
             self.assertEqual(call["password"], "secret-for-test")
             self.assertFalse(call["root_present"])
+
+    def test_mixed_memory_tables_use_consistent_locked_backup(self):
+        result, calls = self.run_backup(TEST_MEMORY="1")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("--lock-all-tables", calls[-1]["args"])
+        self.assertNotIn("--single-transaction", calls[-1]["args"])
 
     def test_unsupported_schemas_never_start_dump(self):
         for shape in ["0:0:0:0:0", "12:1:0:0:0", "12:0:1:0:0", "12:0:0:1:0", "12:0:0:0:1", "unexpected:0:0:0:0"]:

@@ -1,0 +1,10 @@
+version: 1
+actions:
+  - id: workspace.ping
+    scope: workspace
+    kind: ansible
+    playbook: playbooks/ping.yml
+  - id: project.copy
+    scope: project
+    kind: ansible
+    playbook: playbooks/project-copy.yml
