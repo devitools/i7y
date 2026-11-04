@@ -2,6 +2,14 @@
 
 This is a preparation runbook, checked against the repository and official documentation on 2026-10-29. It does not report a submitted, approved, or published app. The release path is native simulator/emulator development, real APNs/FCM verification in a supported virtual environment, signed production artifacts, then App Store Review and Google Play production. There is no TestFlight testing or beta-distribution stage.
 
+## App Store submission — October 30, 2026
+
+App Store Connect accepted iOS version `0.1.0 (2)` for review at 18:43 America/Fortaleza (UTC−03:00). The verified status is **Waiting for Review**; this is not approval or public availability. Submission ID: `88d9e054-2dea-42d5-a0ac-7ec68c6e98ae`. App ID: `6828724152`.
+
+The submission includes two native iPhone screenshots and two native 13-inch iPad screenshots, captured against the synthetic reviewer installation in Brazilian Portuguese. The publisher authorized the privacy declaration and free availability in all 175 countries or regions. Category: Productivity; calculated age rating: 4+. Automatic release after approval is selected. Support/privacy URLs and private reviewer access were saved. The iPhone and iPad browser sign-in flows were exercised with the reviewer account. No TestFlight distribution was used.
+
+Release work now continues from the main checkout. Private credentials and signed artifacts still retained in the previous mobile worktree must be preserved until explicitly migrated. The local simulator build, mobile typecheck, lint, and whitespace validation passed in the main checkout. Google Play account verification remains pending; no Google Play submission has been made.
+
 ## Current configuration and accounts
 
 | Item | Recorded state |
@@ -28,6 +36,18 @@ The publisher confirmed incident opening and resolution notifications on the phy
 The production gateway preserves both existing registrations. Its current allowlist accepts iOS sandbox and Android production. Add iOS production only after installing an Apple credential permitted for that environment; preserve sandbox support while the acceptance app remains installed.
 
 The release preparation check passed mobile typecheck, lint, 20/20 Expo Doctor checks, and 19 client/push-proof tests after aligning React Native to the SDK 58 required patch `0.88.1`. This dependency change requires fresh native artifacts and acceptance before release. EAS authentication is valid for `wilcorrea/i7y`. Apple authentication in EAS is now valid. The App Store distribution certificate and active profile `5M6R7237S6` were created for team `6Y2CA8W7JV`; the Android upload keystore is managed by EAS. Store builds are in progress: iOS `0.1.0 (1)`, EAS ID `acf498ce-1e0f-4190-bc7f-ada948bbd116`; Android `0.1.0 (2)`, EAS ID `f4325bd5-5428-4d1d-b405-e983b2a68ce6`. Artifact signing and embedded configuration remain unverified until those builds finish. No build has been submitted to either store. The EAS production environment includes the Android client file; the FCM service-account private key remains only at the gateway and private local storage.
+
+## Store upload status
+
+The publisher authorized an App Store Connect API key with `APP_MANAGER` role, stored in EAS for the i7y project. iOS build `0.1.0 (2)` (`3dafe84e-fd87-4bab-bec4-57150c501c03`) supersedes build 1 by adding public support/privacy links in Settings. Its upload was scheduled as EAS submission `e85d4577-3f82-4ff5-ad8b-ea971fe86c9d`; scheduling is not successful Apple processing or App Review. Android build `0.1.0 (3)` is `52640dfb-7902-4092-8a2c-a4a78c5b6cda` and supersedes build 2 for the same change. Public support/privacy pages at `https://i7y.devi.tools/support` and `https://i7y.devi.tools/privacy` were checked without login. The public contact is `i7y@devi.tools`.
+
+App Store Connect record: `6828724152`, primary locale Brazilian Portuguese, SKU `i7y-mobile`. Required store listing, screenshots, privacy declarations, reviewer demo access, and final review remain unfinished. No release is publicly available.
+
+## Reviewer demonstration
+
+`https://demo-i7y.devi.tools` runs a separate database and independently generated encryption key on the public-site host. The imported runtime's PocketBase binary, hooks, migrations, and public files were hash-compared against `i7y.disk.ninja` before starting. No production database, account, or server credential was copied.
+
+Acceptance confirmed valid HTTPS, reviewer password login, mobile discovery, and exactly one workspace, one synthetic server (`web-01.example.test`, documentation-only address `192.0.2.10`), and one critical `Full disk` incident with synthetic evidence. The reviewer has editor membership only in `i7y Demo`. Private access details are retained outside the repository and must be entered only in the stores' private review fields. Do not publish them in screenshots, listing copy, or documentation.
 
 ## 1. Build the native acceptance apps
 

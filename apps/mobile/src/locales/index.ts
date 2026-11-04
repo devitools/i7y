@@ -2,6 +2,7 @@ import { getLocales } from 'expo-localization';
 import { useSyncExternalStore } from 'react';
 
 const en = {
+  support: 'Support', privacyPolicy: 'Privacy policy', linkError: 'Could not open the page. Please try again.',
   incidents: 'Incidents', settings: 'Settings', connect: 'Connect', incident: 'Incident',
   signIn: 'Sign in', backendUrl: 'Backend URL', savedServer: 'Saved on this device. Use the address of your i7y installation.', language: 'Language', toggleTheme: 'Toggle theme', unsupportedServer: 'This server does not support the mobile app yet. Update the server to enable access.',
   connectTitle: 'Your response starts here', connectBody: 'Connect to your i7y server to follow incidents and take ownership when it matters.',
@@ -41,6 +42,7 @@ const en = {
 export type MessageKey = keyof typeof en;
 type Messages = Record<MessageKey, string>;
 const pt: Messages = {
+  support: 'Suporte', privacyPolicy: 'Política de privacidade', linkError: 'Não foi possível abrir a página. Tente novamente.',
   incidents: 'Incidentes', settings: 'Ajustes', connect: 'Conectar', incident: 'Incidente',
   signIn: 'Entrar', backendUrl: 'URL do backend', savedServer: 'Salvo neste dispositivo. Use o endereço da sua instalação do i7y.', language: 'Idioma', toggleTheme: 'Alternar tema', unsupportedServer: 'Este servidor ainda não oferece suporte ao app. Atualize o servidor para habilitar o acesso.',
   connectTitle: 'Sua resposta começa aqui', connectBody: 'Conecte seu servidor i7y para acompanhar incidentes e assumir a resposta quando precisar.',
@@ -78,6 +80,7 @@ const pt: Messages = {
   unavailable: 'Indisponível', noIncident: 'Incidente indisponível', noIncidentBody: 'Ele pode ter sido removido ou sua organização pode não ter mais acesso.',
 };
 const uk: Messages = {
+  support: 'Підтримка', privacyPolicy: 'Політика конфіденційності', linkError: 'Не вдалося відкрити сторінку. Спробуйте ще раз.',
   incidents: 'Інциденти', settings: 'Налаштування', connect: 'Підключити', incident: 'Інцидент',
   signIn: 'Увійти', backendUrl: 'Адреса сервера', savedServer: 'Збережено на цьому пристрої. Використовуйте адресу вашої інсталяції i7y.', language: 'Мова', toggleTheme: 'Змінити тему', unsupportedServer: 'Цей сервер ще не підтримує мобільний застосунок. Оновіть сервер, щоб увімкнути доступ.',
   connectTitle: 'Реагування починається тут', connectBody: 'Підключіть свій сервер i7y, щоб стежити за інцидентами та брати відповідальність.',
