@@ -3,7 +3,7 @@ import { Image } from 'expo-image';
 import { listRowBackground, scrollContentBackground } from '@expo/ui/swift-ui/modifiers';
 import { Button, Column, FieldGroup, Host, ListItem, Picker, RNHostView, Text as NativeText } from '@expo/ui';
 import { useRef, useState, type ReactElement } from 'react';
-import { Alert, Platform, Text, View } from 'react-native';
+import { Alert, Linking, Platform, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack } from 'expo-router/stack';
 import { Notice } from '@/components/ui';
@@ -65,6 +65,10 @@ export default function SettingsScreen() {
         <FieldGroup.Section modifiers={rowModifiers} title={t('notifications')}>
           <ListItem colors={rowColors} trailing={<Button disabled={pushActionDisabled} variant="text" onPress={() => void perform(removingPush ? state.disablePush : state.registerPush, 'pushError')}><NativeText textStyle={{ color: pushActionDisabled ? c.muted : Platform.OS === 'ios' ? c.dark ? '#0a84ff' : '#007aff' : c.brand }}>{t(pushActionLabel)}</NativeText></Button>}><NativeText>{t('notifications')}</NativeText></ListItem>
           <ListItem colors={rowColors}><NativeText textStyle={{ color: c.muted, fontSize: 17 }}>{t(pushTitle) + ' ' + t(pushBody)}</NativeText></ListItem>
+        </FieldGroup.Section>
+        <FieldGroup.Section modifiers={rowModifiers} title={t('support')}>
+          {neutralAction(<Button label={t('support')} variant="text" onPress={() => void perform(() => Linking.openURL('https://i7y.devi.tools/support').then(() => undefined), 'linkError')} />)}
+          {neutralAction(<Button label={t('privacyPolicy')} variant="text" onPress={() => void perform(() => Linking.openURL('https://i7y.devi.tools/privacy').then(() => undefined), 'linkError')} />)}
         </FieldGroup.Section>
         <FieldGroup.Section modifiers={rowModifiers}>
           {neutralAction(<Button label={t('signOut')} disabled={busy} variant="text" onPress={() => confirm('signOut')} />)}

@@ -13,8 +13,8 @@ Brazilian Portuguese product copy, private review-note templates, and public pri
 | Category | Productivity is a proposed fit, not a submitted selection |
 | Price and territories | Publisher decision; no pricing or country selection is assumed |
 | Legal publisher / copyright | `[LEGAL_PUBLISHER_NAME]`, `[COPYRIGHT_YEAR]`; confirm authority to use the brand |
-| Privacy policy | `[PUBLIC_PRIVACY_POLICY_URL]`; public, accessible, accurate, and accessible from the app as required |
-| Support | `[PUBLIC_SUPPORT_URL]`, `i7y@devi.tools` (publisher-authorized public email) |
+| Privacy policy | `https://i7y.devi.tools/privacy`; public, accessible, accurate, and accessible from the app as required |
+| Support | `https://i7y.devi.tools/support`, `i7y@devi.tools` (publisher-authorized public email) |
 | Account/data deletion resource | `[PUBLIC_DELETION_URL]` if applicable; determine account-creation scope first |
 | Store app IDs | App Store Connect `6828724152`; Google Play record pending |
 | Review contact | `[PRIVATE_REVIEW_CONTACT]`; enter in each store's private review area |
