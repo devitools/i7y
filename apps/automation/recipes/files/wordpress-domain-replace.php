@@ -34,7 +34,18 @@ foreach ($tables as $table) {
     foreach ($description as $column) {
         if ($column->Key === 'PRI') {
             $keys[] = $column->Field;
-        } elseif ($column->Field !== 'guid' && preg_match('/text|varchar/i', $column->Type)) {
+            if ($column->Field !== 'guid' && preg_match('/char|text|blob|binary|json/i', $column->Type)) {
+                $matches = $wpdb->get_col($wpdb->prepare('SELECT ' . $identifier($column->Field) . ' FROM ' . $tableSql . ' WHERE LOWER(CONVERT(' . $identifier($column->Field) . ' USING utf8mb4)) LIKE %s', '%' . $wpdb->esc_like(strtolower($source)) . '%'));
+                if ($wpdb->last_error) {
+                    $fail('read');
+                }
+                foreach ($matches as $match) {
+                    if (preg_match('~' . $pattern . '~i', $match)) {
+                        $fail('primary_key_contains_domain');
+                    }
+                }
+            }
+        } elseif ($column->Field !== 'guid' && preg_match('/char|text|blob|binary|json/i', $column->Type)) {
             $columns[] = $column->Field;
         }
     }
@@ -46,7 +57,7 @@ foreach ($tables as $table) {
     }
     $candidates = [];
     foreach ($columns as $column) {
-        $candidates[] = $wpdb->prepare('LOWER(' . $identifier($column) . ') LIKE %s', '%' . $wpdb->esc_like(strtolower($source)) . '%');
+        $candidates[] = $wpdb->prepare('LOWER(CONVERT(' . $identifier($column) . ' USING utf8mb4)) LIKE %s', '%' . $wpdb->esc_like(strtolower($source)) . '%');
     }
     $candidateSql = '(' . implode(' OR ', $candidates) . ')';
     $selectSql = implode(', ', array_map($identifier, array_merge($keys, $columns)));

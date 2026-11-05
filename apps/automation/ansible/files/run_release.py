@@ -76,7 +76,7 @@ def main():
         raise ValueError('Invalid action parameters')
     runtime = subprocess.check_output(['/usr/bin/ansible-playbook', '--version'], env={'PATH': '/usr/bin:/bin', 'HOME': str(Path.home()), 'LC_ALL': 'C'}, timeout=15).decode().splitlines()[0]
     if payload['phase'] == 'execute' and payload.get('expected_runtime') != runtime:
-        print(json.dumps({'error': 'The automation runtime changed. Review the copy again.'}))
+        print(json.dumps({'error': 'The automation runtime changed. Review the copy again.', 'error_code': 'runtime_changed_before_execution'}))
         return 1
     files = payload['files']
     if len(files) > 32 or sum(len(v) for v in files.values()) > 262144:

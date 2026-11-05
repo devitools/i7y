@@ -106,6 +106,60 @@ class ProjectCopy(unittest.TestCase):
         self.assertNotEqual(value['database_name'], self.containers[0]['Id'])
         self.assertEqual(value['destination_root'], str(self.root.parent / 'copy.example.com'))
 
+    def test_reservation_rechecks_collision_after_failure(self):
+        state = self.root.parent / 'reservation'
+        state.mkdir()
+        value = self.model()
+        plan = {'source': value, 'request': self.request, 'created_at': int(module.time.time())}
+        def run(args):
+            return value['database_name'] if args[:3] == ['docker', 'container', 'ls'] else ''
+        with patch.object(module, 'load_plan', return_value=(state, plan)), patch.object(module, 'inspect', return_value=value), patch.object(module, 'check_space'), patch.object(module, 'command', side_effect=run):
+            for _ in range(2):
+                with self.assertRaisesRegex(module.CopyError, 'resource already exists'):
+                    module.reserve(self.request)
+                self.assertFalse((state / 'started.json').exists())
+                self.assertFalse((state.parent / 'copy.lock').exists())
+
+    def test_prepare_rejects_existing_actual_volume_name(self):
+        state = self.root.parent / 'volume-collision'
+        state.mkdir()
+        (state / 'started.json').touch()
+        (state / 'source-compose.json').write_text(json.dumps({'volumes': {'source.example.com-data': {}}}))
+        value = self.model()
+        plan = {'source': value}
+        with patch.object(module, 'load_plan', return_value=(state, plan)), patch.object(module, 'command', return_value=value['volume_name'] + '-copy.example.com-data\n'):
+            for _ in range(2):
+                with self.assertRaisesRegex(module.CopyError, 'resource already exists'):
+                    module.prepare(self.request)
+        self.assertFalse(Path(value['destination_root']).exists())
+
+    def test_started_reservation_requires_matching_lock_owner(self):
+        state = self.root.parent / 'started'
+        state.mkdir()
+        (state / 'started.json').touch()
+        lock = state.parent / 'copy.lock'
+        lock.mkdir()
+        (lock / 'owner.json').write_text(json.dumps({'operation_id': 'f' * 32}))
+        value = self.model()
+        plan = {'source': value, 'request': self.request, 'created_at': int(module.time.time())}
+        with patch.object(module, 'load_plan', return_value=(state, plan)), patch.object(module, 'inspect', return_value=value):
+            with self.assertRaisesRegex(module.CopyError, 'lock owner mismatch'):
+                module.reserve(self.request)
+            (lock / 'owner.json').write_text(json.dumps({'operation_id': self.request['operation_id']}))
+            self.assertEqual(module.reserve(self.request)['database_id'], value['database_id'])
+
+    def test_completed_reservation_returns_without_touching_source(self):
+        state = self.root.parent / 'completed'
+        state.mkdir()
+        (state / 'started.json').touch()
+        (state / 'completed.json').write_text(json.dumps({'review_required': False}))
+        (state / 'verified.json').write_text(json.dumps({'source': 'source.example.com', 'destination': 'copy.example.com'}))
+        value = self.model()
+        plan = {'source': value, 'request': self.request, 'created_at': int(module.time.time())}
+        with patch.object(module, 'load_plan', return_value=(state, plan)), patch.object(module, 'inspect', side_effect=AssertionError('Source must not be inspected')):
+            self.assertTrue(module.reserve(self.request)['completed'])
+        self.assertFalse((state.parent / 'copy.lock').exists())
+
     def test_refuses_invalid_domains(self):
         for value in ['source.example.com', 'copy;id', '*.example.com', '-bad.example.com', 'a/../example.com', 'UPPER.example.com']:
             with self.subTest(value=value), self.assertRaises(module.CopyError):
@@ -212,7 +266,10 @@ class ProjectCopy(unittest.TestCase):
         value = dict(self.model(), files=module.manifest(self.root))
         plan = {'source': value, 'fingerprint': module.digest(value), 'request': self.request}
         original_config = (self.root / 'app/public/wp-config.php').read_bytes()
-        with patch.object(module, 'load_plan', return_value=(state, plan)), patch.object(module, 'inspect', return_value=value), patch.object(module, 'available_subnet', return_value='10.240.0.0/28'):
+        original_command = module.command
+        def run(args, timeout=60):
+            return '' if args[:3] == ['docker', 'volume', 'ls'] else original_command(args, timeout)
+        with patch.object(module, 'load_plan', return_value=(state, plan)), patch.object(module, 'inspect', return_value=value), patch.object(module, 'available_subnet', return_value='10.240.0.0/28'), patch.object(module, 'command', side_effect=run):
             result = module.prepare(self.request)
             self.assertEqual(module.prepare(self.request), result)
         compose = json.loads(Path(result['compose_path']).read_text())

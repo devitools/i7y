@@ -9,7 +9,7 @@ import {summarizeCopySteps,type CopyStep} from '../copy-progress'
 import PageHeader from './PageHeader.vue'
 const props=defineProps<{projectId:string;returnTo?:string|null}>()
 interface CopyFailure {stage?:string;name?:string;error?:string;rc?:number;command?:string}
-interface CopyPreview {error_detail?:CopyFailure;operation_id:string;source_domain:string;destination_domain:string;source_root:string;destination_root:string;database_name:string;web_name:string;volume_name:string;network_name:string;file_count:number;expires_at:number;runtime?:string;error?:string;review_required?:boolean}
+interface CopyPreview {error_detail?:CopyFailure;operation_id:string;source_domain:string;destination_domain:string;source_root:string;destination_root:string;database_name:string;web_name:string;volume_name:string;network_name:string;file_count:number;expires_at:number;runtime?:string;error?:string;review_required?:boolean;refresh_preview?:boolean}
 const project=ref(null),server=ref(null),domain=ref(''),confirmation=ref(''),loading=ref(false),busy=ref(false),error=ref(''),preview=ref<CopyPreview|null>(null),result=ref<CopyPreview|null>(null),started=ref(false)
 const valid=computed(()=>domain.value.length<=253 && domain.value.includes('.') && domain.value!==project.value?.name && domain.value.split('.').every(part=>/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(part)))
 const tasks=ref<string[]>([]),progressId=ref(''),failedTask=ref<string|null>(null)
@@ -57,7 +57,7 @@ async function inspect(){
 async function execute(){
  if(!preview.value || busy.value || confirmation.value!==preview.value.destination_domain || !activeOrganization.value || started.value)return
  const current=generation;started.value=true;busy.value=true;error.value='';failure.value=null
- try{const value=await track('execute',()=>invoke<CopyPreview>('project_copy_execute',{organization:activeOrganization.value,operationId:preview.value.operation_id,confirmation:confirmation.value}));if(current===generation){if(value.error)showFailure(value);else result.value=value}}
+ try{const value=await track('execute',()=>invoke<CopyPreview>('project_copy_execute',{organization:activeOrganization.value,operationId:preview.value.operation_id,confirmation:confirmation.value}));if(current===generation){if(value.error){showFailure(value);if(value.refresh_preview)preview.value=null}else result.value=value}}
  catch{if(current===generation)error.value=t('The copy was interrupted. Inspect its operation state before trying again.')}
  finally{if(current===generation){busy.value=false;if(!result.value)started.value=false}}
 }

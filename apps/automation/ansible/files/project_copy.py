@@ -225,20 +225,40 @@ def load_plan(request):
 
 def reserve(request):
     state, plan = load_plan(request)
+    if (state / 'completed.json').is_file():
+        completed = json.loads((state / 'completed.json').read_text())
+        verified = json.loads((state / 'verified.json').read_text())
+        require(completed.get('review_required') is False and verified.get('source') == plan['source']['source_domain'] and verified.get('destination') == plan['source']['destination_domain'], 'Completed operation state is invalid')
+        lock = state.parent / 'copy.lock'
+        if lock.exists() and (lock / 'owner.json').is_file() and json.loads((lock / 'owner.json').read_text()).get('operation_id') == request['operation_id']:
+            (lock / 'owner.json').unlink()
+            lock.rmdir()
+        return dict(public_plan(plan['source']), review_required=False, operation_id=request['operation_id'], completed=True)
     require((state / 'started.json').exists() or int(time.time()) <= plan['created_at'] + 600, 'Preview expired; inspect the project again')
     require({k: v for k, v in inspect(plan['request'], include_files=False).items() if k != 'files'} == {k: v for k, v in plan['source'].items() if k != 'files'}, 'Source container configuration changed')
+    lock = state.parent / 'copy.lock'
     if (state / 'started.json').exists():
+        require((lock / 'owner.json').is_file() and json.loads((lock / 'owner.json').read_text()).get('operation_id') == request['operation_id'], 'Operation lock owner mismatch')
         return dict(public_plan(plan['source']), state_path=str(state), database_id=plan['source']['database_id'])
     require(not Path(plan['source']['destination_root']).exists(), 'Destination directory already exists')
     check_space(plan['source'], state.parent)
-    lock = state.parent / 'copy.lock'
-    require(not lock.exists(), 'Another project copy requires completion or reconciliation')
-    lock.mkdir(mode=0o700)
-    private_json(lock / 'owner.json', {'operation_id': request['operation_id']})
+    created_lock = False
+    if lock.exists():
+        require((lock / 'owner.json').is_file() and json.loads((lock / 'owner.json').read_text()).get('operation_id') == request['operation_id'], 'Another project copy requires completion or reconciliation')
+    else:
+        lock.mkdir(mode=0o700)
+        created_lock = True
+        private_json(lock / 'owner.json', {'operation_id': request['operation_id']})
+    try:
+        for kind, key in [('container', 'database_name'), ('container', 'web_name'), ('volume', 'volume_name'), ('network', 'network_name')]:
+            values = command(['docker', kind, 'ls'] + (['-a'] if kind == 'container' else []) + ['--format', '{{.Name}}' if kind == 'volume' else '{{.Names}}' if kind == 'container' else '{{.Name}}']).splitlines()
+            require(plan['source'][key] not in values, 'Destination Docker resource already exists')
+    except CopyError:
+        if created_lock:
+            (lock / 'owner.json').unlink()
+            lock.rmdir()
+        raise
     private_json(state / 'started.json', {'started_at': int(time.time())})
-    for kind, key in [('container', 'database_name'), ('container', 'web_name'), ('volume', 'volume_name'), ('network', 'network_name')]:
-        values = command(['docker', kind, 'ls'] + (['-a'] if kind == 'container' else []) + ['--format', '{{.Name}}' if kind == 'volume' else '{{.Names}}' if kind == 'container' else '{{.Name}}']).splitlines()
-        require(plan['source'][key] not in values, 'Destination Docker resource already exists')
     return dict(public_plan(plan['source']), state_path=str(state), database_id=plan['source']['database_id'])
 
 
@@ -264,6 +284,11 @@ def prepare(request):
     value = plan['source']
     root = Path(value['source_root'])
     destination = Path(value['destination_root'])
+    compose = json.loads((state / 'source-compose.json').read_text())
+    volume_names = command(['docker', 'volume', 'ls', '--format', '{{.Name}}']).splitlines()
+    for key in compose.get('volumes', {}):
+        key = key.replace(value['source_domain'], value['destination_domain'])
+        require(value['volume_name'] + '-' + key not in volume_names, 'Destination Docker resource already exists')
     require({k: v for k, v in inspect(plan['request'], include_files=False).items() if k != 'files'} == {k: v for k, v in value.items() if k != 'files'}, 'Source container configuration changed')
     backup = state / 'database.sql'
     require(backup.is_file() and backup.stat().st_size > 0, 'Verified database backup required before copying files')
@@ -288,7 +313,6 @@ def prepare(request):
     dbcredentials = dict(credentials, MYSQL_ROOT_PASSWORD=secrets.token_hex(32))
     tools = str(state / 'tools')
     network = value['network_name']
-    compose = json.loads((state / 'source-compose.json').read_text())
     services = compose['services']
     db_service = value['database_service'].replace(value['source_domain'], value['destination_domain'])
     web_service = value['web_service'].replace(value['source_domain'], value['destination_domain'])

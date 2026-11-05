@@ -134,6 +134,18 @@ fn release_id(files: &BTreeMap<&str, &str>) -> String {
     format!("{:x}", hash.finalize())
 }
 
+fn should_refresh_preview(was_started: bool, result: &Value) -> bool {
+    !was_started && result["error_code"] == "runtime_changed_before_execution"
+}
+
+fn release_change(was_started: bool) -> Value {
+    if was_started {
+        json!({"error": "The desktop release changed. Restore the original version before resuming this copy."})
+    } else {
+        json!({"error": "The desktop release changed. Review the copy again.", "refresh_preview": true})
+    }
+}
+
 #[tauri::command]
 pub async fn project_copy_preview(
     app: tauri::AppHandle,
@@ -227,10 +239,15 @@ pub async fn project_copy_execute(
         || confirmation != target.destination_domain
         || review["profile"]
             != serde_json::to_value(&profile).map_err(|_| SshError::InvalidProfile)?
-        || (!temporary.join("execution-started").exists() && review["preview"]["expires_at"].as_u64().unwrap_or(0) < now)
-        || (!temporary.join("execution-started").exists() && review["preview"]["release"] != release_id(&release_files()))
     {
         return Err(SshError::InvalidProfile);
+    }
+    let was_started = temporary.join("execution-started").exists();
+    if review["preview"]["release"] != release_id(&release_files()) {
+        return Ok(release_change(was_started));
+    }
+    if !was_started && review["preview"]["expires_at"].as_u64().unwrap_or(0) < now {
+        return Ok(json!({"error": "The preview expired. Review the copy again.", "refresh_preview": true}));
     }
     private_write(&temporary.join("execution-started"), b"started")?;
     let _ = app.emit("project-copy-started", json!({"operation_id": operation_id, "phase": "execute"}));
@@ -240,7 +257,11 @@ pub async fn project_copy_execute(
         let payload = json!({"address": target.address, "port": target.port, "phase": "execute", "request": request, "expected_runtime": review["preview"]["runtime"], "files": release_files()});
         let outcome = ssh::run_ansible_release(&profile, &temporary.join("known_hosts"), serde_json::to_vec(&payload).map_err(|_| SshError::InvalidProfile)?);
         let _ = fs::remove_file(temporary.join("execution-running"));
-        let result = outcome?;
+        let mut result = outcome?;
+        if should_refresh_preview(was_started, &result) {
+            fs::remove_file(temporary.join("execution-started")).map_err(|_| SshError::LocalStorageFailed)?;
+            result["refresh_preview"] = json!(true);
+        }
         private_write(&temporary.join("result.json"), &serde_json::to_vec(&result).map_err(|_| SshError::LocalStorageFailed)?)?;
         Ok(result)
     }).await.map_err(|_| SshError::ConnectionFailed)?
@@ -262,6 +283,20 @@ mod tests {
         let mut changed = files.clone();
         changed.insert("ansible/files/run_release.py", "changed");
         assert_ne!(first, release_id(&changed));
+    }
+    #[test]
+    fn refresh_only_when_runtime_rejection_precedes_first_execution() {
+        let rejected = json!({"error_code": "runtime_changed_before_execution"});
+        assert!(should_refresh_preview(false, &rejected));
+        assert!(!should_refresh_preview(true, &rejected));
+        assert!(!should_refresh_preview(false, &json!({"error": "interrupted"})));
+        assert!(!should_refresh_preview(false, &json!({})));
+    }
+    #[test]
+    fn release_change_only_allows_refresh_before_execution() {
+        assert_eq!(release_change(false)["refresh_preview"], true);
+        assert!(release_change(true).get("refresh_preview").is_none());
+        assert!(release_change(true)["error"].as_str().unwrap().contains("original version"));
     }
     #[test]
     fn copy_targets_reject_patterns_and_command_parameters() {

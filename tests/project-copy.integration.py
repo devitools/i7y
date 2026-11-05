@@ -107,8 +107,9 @@ require_once ABSPATH . 'wp-settings.php';
         values['i7y_phase'] = 'execute'
         parameters.write_text(json.dumps(values))
         full_playbook = fixture_playbook.read_text()
-        pause = '            - name: Update the copied site domain while preserving plugins and theme'
-        fixture_playbook.write_text(full_playbook.replace(pause, '            - name: Simulate interrupted copy\n              ansible.builtin.fail:\n                msg: Fixture interruption after database restoration\n' + pause))
+        pause = '                - name: Update the copied site domain while preserving plugins and theme'
+        self.assertIn(pause, full_playbook)
+        fixture_playbook.write_text(full_playbook.replace(pause, '                - name: Simulate interrupted copy\n                  ansible.builtin.fail:\n                    msg: Fixture interruption after database restoration\n' + pause))
         self.assertNotEqual(self.run_command(call, check=False, timeout=600).returncode, 0)
         self.assertTrue((state / 'restored').exists())
         backup_digest = hashlib.sha256((state / 'database.sql').read_bytes()).hexdigest()
@@ -130,7 +131,12 @@ require_once ABSPATH . 'wp-settings.php';
         self.assertEqual(json.loads(self.run_command(new_wp + ['option', 'get', 'nested', '--format=json']).stdout), {'url': 'https://' + operation['destination_domain'] + '/path'})
         self.assertEqual(json.loads(self.run_command(new_wp + ['option', 'get', 'active_plugins', '--format=json']).stdout), ['copy-fixture/fixture.php'])
         self.assertEqual(json.loads(self.run_command(new_wp + ['option', 'get', 'theme_settings', '--format=json']).stdout), {'logo': 'https://' + operation['destination_domain'] + '/logo.png', 'nested': {'enabled': True}})
+        destination_compose = destination / 'app/docker-compose.yml'
+        edited_compose = destination_compose.read_bytes() + b'\n# User change after completion\n'
+        destination_compose.write_bytes(edited_compose)
         self.run_command(call, timeout=600)
+        self.assertTrue(json.loads(result_path.read_text())['completed'])
+        self.assertEqual(destination_compose.read_bytes(), edited_compose)
 
 
 if __name__ == '__main__':
