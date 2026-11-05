@@ -39,7 +39,7 @@ impl CopyTarget {
             || !domain(&self.source_domain)
             || !domain(&self.destination_domain)
             || self.source_domain == self.destination_domain
-            || !Path::new(&self.source_path).is_absolute()
+            || !self.source_path.starts_with('/')
             || self.source_path.len() > 4096
             || self.source_path.contains(['\0', '\n', '\r'])
             || Path::new(&self.source_path)

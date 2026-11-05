@@ -33,18 +33,18 @@ let progressTimer:ReturnType<typeof setTimeout>|undefined
 let progressActive=false
 function stopProgress(){progressActive=false;clearTimeout(progressTimer)}
 onBeforeUnmount(stopProgress)
-async function track<T>(phase:string,action:()=>Promise<T>):Promise<T>{
+async function track<T>(phase:string,action:()=>Promise<T>,operationId?:string):Promise<T>{
  stopProgress();tasks.value=[];steps.value=[];failedTask.value=null;progressId.value='';progressActive=true
  const scope=generation
  const poll=async(id:string)=>{
   try{const value=await invoke<{tasks:string[];failed_task:string|null;steps?:CopyStep[]}>('project_copy_progress',{organization:activeOrganization.value,operationId:id,phase});if(progressActive && scope===generation){tasks.value=[...new Set(value.tasks)];steps.value=value.steps || tasks.value.map(name=>({name,state:name===value.failed_task?'failed':'completed'}));failedTask.value=value.failed_task}}catch{}
   if(progressActive && scope===generation)progressTimer=setTimeout(()=>poll(id),2000)
  }
- const unlisten=await listen<{operation_id:string;phase:string}>('project-copy-started',event=>{if(event.payload.phase===phase && scope===generation){progressId.value=event.payload.operation_id;void poll(progressId.value)}})
- try{return await action()}finally{stopProgress();unlisten();if(progressId.value && scope===generation){try{const value=await invoke<{tasks:string[];failed_task:string|null;steps?:CopyStep[]}>('project_copy_progress',{organization:activeOrganization.value,operationId:progressId.value,phase});{tasks.value=[...new Set(value.tasks)];steps.value=value.steps || tasks.value.map(name=>({name,state:name===value.failed_task?'failed':'completed'}));failedTask.value=value.failed_task}}catch{}}}
+ const unlisten=await listen<{operation_id:string;phase:string}>('project-copy-started',event=>{if(event.payload.phase===phase && scope===generation && (!operationId || event.payload.operation_id===operationId)){progressId.value=event.payload.operation_id;void poll(progressId.value)}})
+ try{return await action()}finally{if(scope===generation)stopProgress();unlisten();if(progressId.value && scope===generation){try{const value=await invoke<{tasks:string[];failed_task:string|null;steps?:CopyStep[]}>('project_copy_progress',{organization:activeOrganization.value,operationId:progressId.value,phase});if(scope===generation){tasks.value=[...new Set(value.tasks)];steps.value=value.steps || tasks.value.map(name=>({name,state:name===value.failed_task?'failed':'completed'}));failedTask.value=value.failed_task}}catch{}}}
 }
 let generation=0
-watch(()=>[props.projectId,activeOrganization.value],async()=>{stopProgress();const current=++generation;project.value=null;server.value=null;preview.value=null;result.value=null;domain.value='';tasks.value=[];progressId.value='';started.value=false;busy.value=false;error.value='';loading.value=true;try{const row=await management.get('projects',props.projectId);const host=await management.get('servers',row.server);if(current===generation){project.value=row;server.value=host}}catch{if(current===generation)error.value=t('Unable to load the selected project.')}finally{if(current===generation)loading.value=false}},{immediate:true})
+watch(()=>[props.projectId,activeOrganization.value],async()=>{stopProgress();const current=++generation;project.value=null;server.value=null;preview.value=null;result.value=null;domain.value='';tasks.value=[];steps.value=[];failure.value=null;failedTask.value=null;progressId.value='';started.value=false;busy.value=false;error.value='';loading.value=true;try{const row=await management.get('projects',props.projectId);const host=await management.get('servers',row.server);if(current===generation){project.value=row;server.value=host}}catch{if(current===generation)error.value=t('Unable to load the selected project.')}finally{if(current===generation)loading.value=false}},{immediate:true})
 watch(domain,()=>{preview.value=null;confirmation.value='';error.value=''})
 async function inspect(){
  if(!desktopRuntime || busy.value || !valid.value || !activeOrganization.value || !server.value || started.value)return
@@ -57,7 +57,7 @@ async function inspect(){
 async function execute(){
  if(!preview.value || busy.value || confirmation.value!==preview.value.destination_domain || !activeOrganization.value || started.value)return
  const current=generation;started.value=true;busy.value=true;error.value='';failure.value=null
- try{const value=await track('execute',()=>invoke<CopyPreview>('project_copy_execute',{organization:activeOrganization.value,operationId:preview.value.operation_id,confirmation:confirmation.value}));if(current===generation){if(value.error){showFailure(value);if(value.refresh_preview)preview.value=null}else result.value=value}}
+ try{const value=await track('execute',()=>invoke<CopyPreview>('project_copy_execute',{organization:activeOrganization.value,operationId:preview.value.operation_id,confirmation:confirmation.value}),preview.value.operation_id);if(current===generation){if(value.error){showFailure(value);if(value.refresh_preview)preview.value=null}else result.value=value}}
  catch{if(current===generation)error.value=t('The copy was interrupted. Inspect its operation state before trying again.')}
  finally{if(current===generation){busy.value=false;if(!result.value)started.value=false}}
 }

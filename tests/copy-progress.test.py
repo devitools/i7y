@@ -13,6 +13,21 @@ spec.loader.exec_module(callback)
 
 
 class Progress(unittest.TestCase):
+    def test_unchanged_success_is_completed_and_skipped_stage_is_reused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'events'
+            class Task:
+                def get_name(self):
+                    return 'Wait for the new database'
+            class Result:
+                _task = Task()
+                _result = {'changed': False}
+            with patch.dict(os.environ, {'I7Y_EVENTS_PATH': str(path), 'I7Y_ATTEMPT_ID': 'attempt'}):
+                plugin = callback.CallbackModule()
+                plugin.v2_runner_on_ok(Result())
+                plugin.v2_runner_on_skipped(Result())
+            self.assertEqual([json.loads(line)['state'] for line in path.read_text().splitlines()], ['completed', 'reused'])
+
     def test_no_log_failure_exposes_only_safe_reason_and_return_code(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'events'

@@ -284,6 +284,7 @@ def prepare(request):
     value = plan['source']
     root = Path(value['source_root'])
     destination = Path(value['destination_root'])
+    require(manifest(root) == value['files'], 'Source files changed since preview')
     compose = json.loads((state / 'source-compose.json').read_text())
     volume_names = command(['docker', 'volume', 'ls', '--format', '{{.Name}}']).splitlines()
     for key in compose.get('volumes', {}):
@@ -298,6 +299,8 @@ def prepare(request):
             backup_hash.update(chunk)
         os.fsync(stream.fileno())
     backup_sha256 = backup_hash.hexdigest()
+    receipt = state / 'database.sha256'
+    require(receipt.is_file() and not receipt.is_symlink() and receipt.read_text().strip() == backup_sha256, 'Database backup checksum does not match the original backup')
     replace_json(state / 'backup.json', {'sha256': backup_sha256, 'bytes': backup.stat().st_size})
     owner = root.stat()
     require(owner.st_uid != 0, 'A regular project owner is required')

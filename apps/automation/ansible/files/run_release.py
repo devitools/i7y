@@ -33,7 +33,7 @@ def main():
                 attempt = events[-1]['attempt']
                 current = {}
                 for event in events:
-                    if event['attempt'] == attempt:
+                    if event['attempt'] == attempt and event.get('state') != 'started':
                         current[event['name']] = event
                 steps = list(current.values())
                 failed = next((step for step in reversed(steps) if step['state'] == 'failed'), None)
@@ -127,6 +127,8 @@ def main():
         except BlockingIOError:
             print(json.dumps({'error': 'This copy is already running. Wait for it to finish.'}))
             return 1
+        with logfile.with_suffix('.events.jsonl').open('a') as events:
+            events.write(json.dumps({'attempt': env['I7Y_ATTEMPT_ID'], 'state': 'started'}) + '\n')
         with logfile.open('ab') as log:
             log.write(b'\nI7Y_ATTEMPT\n')
             log.flush()
@@ -161,8 +163,9 @@ def main():
                     try:
                         event = json.loads(line)
                         if event.get('attempt') == env['I7Y_ATTEMPT_ID'] and event.get('state') == 'failed':
-                            message = event['error']
-                            error_detail = event
+                            if message not in allowed_errors:
+                                message = event['error']
+                            error_detail = dict(event, error=message)
                     except ValueError:
                         pass
             print(json.dumps({'error': message, 'error_detail': error_detail, 'operation_id': payload['request']['operation_id']}))

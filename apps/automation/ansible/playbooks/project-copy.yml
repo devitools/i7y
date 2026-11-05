@@ -26,7 +26,7 @@
     - name: Select the verified project copy interpreter
       set_fact:
         i7y_python: '{{ i7y_runtime.stdout | trim }}'
-        ansible_python_interpreter: '{{ (i7y_runtime.stdout | trim) if ansible_version.full is version("2.20", ">=") else omit }}'
+        ansible_python_interpreter: '{{ i7y_runtime.stdout | trim }}'
     - name: Require one explicit target and a supported phase
       ansible.builtin.assert:
         that:
@@ -131,7 +131,9 @@
                     umask 077
                     docker exec -i '{{ i7y_copy.database_id }}' /bin/sh < '{{ i7y_copy.state_path }}/tools/mysql-backup.sh' > '{{ i7y_copy.state_path }}/database.sql.partial'
                     test -s '{{ i7y_copy.state_path }}/database.sql.partial'
+                    sha256sum '{{ i7y_copy.state_path }}/database.sql.partial' | cut -d ' ' -f 1 > '{{ i7y_copy.state_path }}/database.sha256.partial'
                     mv '{{ i7y_copy.state_path }}/database.sql.partial' '{{ i7y_copy.state_path }}/database.sql'
+                    mv '{{ i7y_copy.state_path }}/database.sha256.partial' '{{ i7y_copy.state_path }}/database.sha256'
                   args:
                     executable: /bin/sh
                   when: not i7y_steps.results[0].stat.exists

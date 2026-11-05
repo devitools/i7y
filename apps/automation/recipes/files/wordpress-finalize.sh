@@ -18,7 +18,17 @@ restore_quarantine() {
     done
 }
 if php -r '$p="/opt/i7y/state/domain-contract.json"; $v=is_file($p)?json_decode(file_get_contents($p),true):null; exit(is_array($v) && ($v["verified"]??false)===true && ($v["source"]??null)===$argv[1] && ($v["destination"]??null)===$argv[2] && !is_file("/opt/i7y/state/temporary-columns.json") ? 0 : 1);' "$source_domain" "$destination_domain"; then
+    mkdir -p /opt/i7y/state/quarantine
+    trap restore_quarantine EXIT
+    for entry in mu-plugins db.php object-cache.php advanced-cache.php sunrise.php; do
+        if [ -e "$root/wp-content/$entry" ]; then
+            [ ! -e "/opt/i7y/state/quarantine/$entry" ] || exit 66
+            mv "$root/wp-content/$entry" "/opt/i7y/state/quarantine/$entry"
+        fi
+    done
+    wp eval-file /opt/i7y/tools/wordpress-domain-contract.php verify "$source_domain" "$destination_domain"
     restore_quarantine
+    trap - EXIT
     exit 0
 fi
 wp core is-installed

@@ -153,6 +153,8 @@ test('project copy has a dedicated route with a safe inventory return',()=>{
   const route=readRoute('#/projects/project01/actions/copy?returnTo='+encodeURIComponent('#/containers?server=server01&project=project01'))
   assert.equal(route.view,'projectCopy')
   assert.equal(route.id,'project01')
+  assert.equal(readRoute('#/projects/proj%20a%2Fb/actions/copy').id,'proj a/b')
+  assert.equal(readRoute('#/projects/%ZZ/actions/copy').view,'accounts')
   assert.equal(route.returnTo,'#/containers?server=server01&project=project01')
   assert.equal(readRoute('#/projects/project01/actions/copy?returnTo=https://example.com').returnTo,null)
 })

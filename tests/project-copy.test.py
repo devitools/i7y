@@ -125,7 +125,7 @@ class ProjectCopy(unittest.TestCase):
         state.mkdir()
         (state / 'started.json').touch()
         (state / 'source-compose.json').write_text(json.dumps({'volumes': {'source.example.com-data': {}}}))
-        value = self.model()
+        value = dict(self.model(), files=module.manifest(self.root))
         plan = {'source': value}
         with patch.object(module, 'load_plan', return_value=(state, plan)), patch.object(module, 'command', return_value=value['volume_name'] + '-copy.example.com-data\n'):
             for _ in range(2):
@@ -203,6 +203,14 @@ class ProjectCopy(unittest.TestCase):
         first = module.manifest(self.root)
         (self.root / 'app/public/wp-load.php').write_text('changed')
         self.assertNotEqual(first, module.manifest(self.root))
+        state = self.root.parent / 'changed-operation'
+        state.mkdir()
+        (state / 'started.json').write_text('{}')
+        value = dict(self.model(), files=first)
+        with patch.object(module, 'load_plan', return_value=(state, {'source': value, 'request': self.request})):
+            with self.assertRaisesRegex(module.CopyError, 'Source files changed'):
+                module.prepare(self.request)
+        self.assertFalse(Path(value['destination_root']).exists())
         (self.root / 'escape').symlink_to('/etc/passwd')
         with self.assertRaises(module.CopyError):
             module.manifest(self.root)
@@ -254,6 +262,7 @@ class ProjectCopy(unittest.TestCase):
         state.mkdir(mode=0o700)
         (state / 'started.json').write_text('{}')
         (state / 'database.sql').write_text('disposable SQL fixture')
+        (state / 'database.sha256').write_text(module.hashlib.sha256(b'disposable SQL fixture').hexdigest())
         source_compose = {'version': '3', 'services': {
             'database': {'image': 'mysql:5.7', 'environment': {'MYSQL_ROOT_PASSWORD': '${MYSQL_ROOT_PASSWORD}', 'MYSQL_DATABASE': '${MYSQL_DATABASE}', 'MYSQL_USER': '${MYSQL_USER}', 'MYSQL_PASSWORD': '${MYSQL_PASSWORD}'}, 'volumes': ['data:/var/lib/mysql'], 'networks': ['internal']},
             'web': {'image': 'webdevops/php-nginx:8.3', 'privileged': True, 'environment': {'VIRTUAL_HOST': 'source.example.com', 'MYSQL_PASSWORD': '${MYSQL_PASSWORD}'}, 'volumes': ['.:/var/www/app'], 'networks': ['internal', 'reverse-proxy']}},
@@ -270,6 +279,10 @@ class ProjectCopy(unittest.TestCase):
         def run(args, timeout=60):
             return '' if args[:3] == ['docker', 'volume', 'ls'] else original_command(args, timeout)
         with patch.object(module, 'load_plan', return_value=(state, plan)), patch.object(module, 'inspect', return_value=value), patch.object(module, 'available_subnet', return_value='10.240.0.0/28'), patch.object(module, 'command', side_effect=run):
+            (state / 'database.sql').write_text('tampered SQL fixture')
+            with self.assertRaisesRegex(module.CopyError, 'backup checksum'):
+                module.prepare(self.request)
+            (state / 'database.sql').write_text('disposable SQL fixture')
             result = module.prepare(self.request)
             self.assertEqual(module.prepare(self.request), result)
         compose = json.loads(Path(result['compose_path']).read_text())

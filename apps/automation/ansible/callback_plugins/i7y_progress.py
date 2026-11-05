@@ -66,8 +66,7 @@ class CallbackModule(CallbackBase):
         self.emit(task, 'running')
 
     def v2_runner_on_ok(self, result):
-        state = 'reused' if result._task.get_name().strip() in STAGES and not result._result.get('changed', False) else 'completed'
-        self.emit(result._task, state)
+        self.emit(result._task, 'completed')
 
     def v2_runner_on_skipped(self, result):
         self.emit(result._task, 'reused' if result._task.get_name().strip() in STAGES else 'skipped')

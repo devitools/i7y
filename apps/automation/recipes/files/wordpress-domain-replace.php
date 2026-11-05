@@ -7,7 +7,8 @@ if (!$source || !$destination || $source === $destination) {
 if (!class_exists('WP_CLI\\SearchReplacer')) {
     require 'phar:///opt/i7y/tools/wp-cli.phar/vendor/wp-cli/search-replace-command/src/WP_CLI/SearchReplacer.php';
 }
-$pattern = '(?:https?://|//)(?:www\\.)?' . preg_quote($source, '~') . '(?![a-z0-9.-])';
+$hostPattern = '(?:www\\.)?' . preg_quote($source, '~') . '(?![a-z0-9.-])';
+$pattern = '(?:http://' . $hostPattern . ':80(?![0-9])|(?:https?://|//)' . $hostPattern . ')';
 $replacer = new \WP_CLI\SearchReplacer($pattern, 'https://' . $destination, true, true, 'i', '~');
 $identifier = static function ($value) {
     return '`' . str_replace('`', '``', $value) . '`';
