@@ -1,0 +1,33 @@
+---
+- name: Prepare the isolated project-copy interpreter after administrator review
+  hosts: i7y_targets
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - name: Install only the checksum-pinned isolated interpreter
+      raw: |
+        set -eu
+        umask 077
+        test "$(uname -s)" = Linux
+        test "$(uname -m)" = x86_64
+        test ! -e /opt/i7y/python
+        test ! -L /opt/i7y/python
+        if test -e /opt/i7y; then
+          test -d /opt/i7y
+          test ! -L /opt/i7y
+          test "$(stat -c %u /opt/i7y)" = 0
+          test "$(stat -c %a /opt/i7y)" = 755
+        else
+          mkdir -m 755 /opt/i7y
+        fi
+        staging=$(mktemp -d /opt/i7y/python-stage.XXXXXXXX)
+        trap 'rm -rf "$staging"' EXIT HUP INT TERM
+        curl --fail --location --proto '=https' --tlsv1.2 --output "$staging/python.tar.gz" 'https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.12.16%2B20261026-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz'
+        printf '%s  %s\n' ce4f6d0a6cfdb3bed6e44c2f9affd85943c76a42e25ad3a259002f31d6fb8a20 "$staging/python.tar.gz" | sha256sum -c -
+        tar --no-same-owner -xzf "$staging/python.tar.gz" -C "$staging"
+        "$staging/python/bin/python3" -c 'import sys,ssl,sqlite3,ctypes,secrets; assert sys.version_info[:3] == (3,12,16); assert len(secrets.token_bytes(32)) == 32'
+        chmod -R a+rX "$staging/python"
+        mv -T -n "$staging/python" /opt/i7y/python
+        test ! -e "$staging/python"
+        /opt/i7y/python/bin/python3 --version

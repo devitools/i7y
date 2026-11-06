@@ -1,3 +1,18 @@
+# Desktop operations
+
+## Current direct Ansible flow
+
+The desktop connects through system OpenSSH to the configured automation host and
+invokes Ansible directly. It uses a local identity file; there is no 1Password
+integration in the application. Scripts own any external credential integrations.
+The server ping is validated end to end. Project copy now has a dedicated desktop
+route with one destination-domain field and one Copy project button. Inspection runs internally without a second confirmation. See
+[the Ansible action implementation](../apps/automation/ansible/README.md).
+
+The sections below retain earlier design and review context. References to a
+required remote Rust executor describe the earlier prototype, not the current
+direct SSH project-copy flow.
+
 # Desktop operations roadmap
 
 ## Topology
@@ -136,3 +151,18 @@ The desktop uses the system OpenSSH client and a local identity file selected by
 ## Direct connectivity pilot
 
 The server ping screen invokes the system SSH client to the configured automation host, then runs Ansible directly with a single IPv4 inventory entry. No remote i7y executable is required. The initial managed-host connection uses root and port 10222; this pilot does not yet resolve workspace groups or read the legacy inventory. Both SSH hops retain strict host-key checking and disable agent forwarding. The local diagnostic tests unsaved settings; the ping uses the saved connection profile.
+
+## Recoverable project copies
+
+Project copy records database backup, file preparation, WordPress configuration,
+database restoration, domain replacement and activation. Retry the same operation
+from the Resume copy button after a failure. Completed steps are reused. A partial
+restore may reset only the newly allocated destination database before restoring
+its verified SQL backup again. The source database and files are never rewritten.
+The automation host holds an exclusive operation lock while Ansible runs.
+
+The source Compose service configuration, image tags, proxy network, plugins,
+theme options and scheduled tasks are preserved. Destination database credentials
+are independent and stored in a private `.env`; Compose contains variable references.
+The copied directory uses the source project's regular owner. The finished Compose
+is readable YAML. DNS and certificates are not provisioned by this action.

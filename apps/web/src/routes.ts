@@ -5,6 +5,10 @@ export function readRoute(hash: string): RouteState {
   const [path, query = ''] = hash.replace(/^#\/?/, '').split('?')
   const params = new URLSearchParams(query)
   const parts = path.split('/')
+  if(parts[0]==='projects' && parts.length===4 && parts[2]==='actions' && parts[3]==='copy'){
+    try{return {view:'projectCopy',id:decodeURIComponent(parts[1]),returnTo:inventoryReturn(params.get('returnTo'))}}
+    catch{return {view:'accounts'}}
+  }
   if(parts[0]==='servers' && parts.length===4 && parts[2]==='actions' && parts[3]==='ping')return {view:'serverPing',server:decodeURIComponent(parts[1]),returnTo:inventoryReturn(params.get('returnTo'))}
   if(path==='desktop/mcp')return {view:'desktopMcp'}
   if(path==='desktop/controller')return {view:'controllerSettings'}

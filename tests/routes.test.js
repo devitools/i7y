@@ -147,3 +147,14 @@ test('empty list filters never become null strings and old URLs recover',()=>{
   assert.deepEqual(readRoute(`#/organizations/${organization}/members/abcdef123456789/edit`),{view:'organizations',section:'members',action:'edit',id:'abcdef123456789',organization})
   assert.equal(readRoute(`#/organizations/${organization}/invitations/new`).organization,organization)
 })
+
+
+test('project copy has a dedicated route with a safe inventory return',()=>{
+  const route=readRoute('#/projects/project01/actions/copy?returnTo='+encodeURIComponent('#/containers?server=server01&project=project01'))
+  assert.equal(route.view,'projectCopy')
+  assert.equal(route.id,'project01')
+  assert.equal(readRoute('#/projects/proj%20a%2Fb/actions/copy').id,'proj a/b')
+  assert.equal(readRoute('#/projects/%ZZ/actions/copy').view,'accounts')
+  assert.equal(route.returnTo,'#/containers?server=server01&project=project01')
+  assert.equal(readRoute('#/projects/project01/actions/copy?returnTo=https://example.com').returnTo,null)
+})

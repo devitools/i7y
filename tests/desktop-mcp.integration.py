@@ -75,6 +75,21 @@ try:
     server = create('servers', {'name': 'fixture', 'workspace': workspace['id'], 'type': 'VPS'})
     project = create('projects', {'name': 'fixture', 'server': server['id'], 'path': '/srv/example'})
     target = create('containers', {'name': 'fixture', 'project': project['id'], 'image': 'example/app:1'})
+    copy_url = '/api/i7y/project-copy/v1/projects/' + project['id']
+    authorized = ok(copy_url, token=token, org=org)
+    assert authorized['id'] == project['id'] and authorized['organization'] == org
+    assert authorized['source_path'] == '/srv/example' and authorized['source_domain'] == 'fixture'
+    assert call(copy_url, token=token, org=other_org)[0] == 403
+    assert call(copy_url)[0] == 401
+    assert call(copy_url, token='invalid-session', org=org)[0] == 401
+    for role in ('editor', 'reader'):
+        other = create('users', {'email': role + '@example.test', 'password': password, 'passwordConfirm': password})
+        create('organization_memberships', {'user': other['id'], 'organization': org, 'role': role})
+        role_token = ok('/api/collections/users/auth-with-password', 'POST', {'identity': other['email'], 'password': password})['token']
+        assert call(copy_url, token=role_token, org=org)[0] == (200 if role == 'editor' else 403)
+    unrelated = create('users', {'email': 'unrelated@example.test', 'password': password, 'passwordConfirm': password})
+    unrelated_token = ok('/api/collections/users/auth-with-password', 'POST', {'identity': unrelated['email'], 'password': password})['token']
+    assert call(copy_url, token=unrelated_token, org=org)[0] == 403
     prefix = '/api/i7y/operations/v1'
     operation = {'action': 'container.restart', 'target': target['id']}
     ok(prefix + '/check', 'POST', operation, token, org, status=403)

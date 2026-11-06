@@ -13,7 +13,11 @@ wp() {
         MYSQL_USER="${MYSQL_USER:?Destination database user unavailable}" \
         MYSQL_PASSWORD="${MYSQL_PASSWORD:?Destination database credential unavailable}" \
         php /opt/i7y/tools/wp-cli.phar --allow-root --no-color --skip-packages \
-        --skip-plugins --skip-themes --path="$root" "$@"
+        --skip-plugins --skip-themes --path="$root" "$@" || {
+            result=$?
+            case "$1" in config|core|eval-file|option|search-replace) printf 'I7Y_WP_COMMAND=%s\n' "$1" >&2 ;; esac
+            return "$result"
+        }
 }
 
 set_constant() {
@@ -21,5 +25,5 @@ set_constant() {
 }
 
 domain() {
-    php -r '$d=$argv[1]; exit(strlen($d)<=253 && str_contains($d,".") && strtolower($d)===$d && filter_var($d,FILTER_VALIDATE_DOMAIN,FILTER_FLAG_HOSTNAME) ? 0 : 1);' "$1"
+    php -r '$d=$argv[1]; exit(strlen($d)<=253 && strpos($d,".")!==false && strtolower($d)===$d && filter_var($d,FILTER_VALIDATE_DOMAIN,FILTER_FLAG_HOSTNAME) ? 0 : 1);' "$1"
 }

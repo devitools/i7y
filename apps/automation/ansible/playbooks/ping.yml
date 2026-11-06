@@ -1,0 +1,7 @@
+---
+- name: Test the explicitly selected inventory hosts
+  hosts: i7y_targets
+  gather_facts: false
+  tasks:
+    - name: Verify Ansible connectivity
+      ansible.builtin.ping:

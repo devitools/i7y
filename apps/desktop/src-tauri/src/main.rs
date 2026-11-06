@@ -3,6 +3,7 @@
 mod approvals;
 mod backend;
 mod controller;
+mod project_copy;
 mod mcp;
 mod operational;
 mod platform;
@@ -99,6 +100,9 @@ fn main() {
             controller::save_controller_settings,
             controller::diagnose_controller,
             controller::ping_server,
+            project_copy::project_copy_preview,
+            project_copy::project_copy_progress,
+            project_copy::project_copy_execute,
             controller::controller_request
         ])
         .build(tauri::generate_context!())
