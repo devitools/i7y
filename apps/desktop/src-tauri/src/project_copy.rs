@@ -1,7 +1,7 @@
 use crate::controller::{directory, private_write, read_profile};
 use i7y_core::ssh::{self, SshError};
 use rand::RngCore;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -50,6 +50,54 @@ impl CopyTarget {
         }
         Ok(())
     }
+}
+
+fn check_copy_context(app: &tauri::AppHandle, context: &i7y_mcp::Context, lock_epoch: u64) -> Result<(), SshError> {
+    if crate::platform::locked() || crate::platform::lock_epoch() != lock_epoch {
+        return Err(SshError::InvalidProfile);
+    }
+    let backend = app.state::<crate::backend::Backend>();
+    let url = backend.url.lock().map_err(|_| SshError::LocalStorageFailed)?
+        .clone().ok_or(SshError::InvalidProfile)?;
+    let service = app.state::<crate::mcp::Service>();
+    let inner = service.inner.lock().map_err(|_| SshError::LocalStorageFailed)?;
+    if inner.context(url.to_string()).map_err(|_| SshError::InvalidProfile)? != *context {
+        return Err(SshError::InvalidProfile);
+    }
+    Ok(())
+}
+
+fn record_matches_target(record: &Value, organization: &str, project_id: &str, target: &CopyTarget) -> bool {
+    record["id"] == project_id && record["organization"] == organization
+        && record["address"] == target.address && record["source_path"] == target.source_path
+        && record["source_domain"] == target.source_domain && target.port == 10222
+}
+
+async fn authorize_copy(app: &tauri::AppHandle, organization: &str, project_id: &str, target: &CopyTarget) -> Result<(i7y_mcp::Context, u64), SshError> {
+    if project_id.len() != 15 || !project_id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()) || target.port != 10222 {
+        return Err(SshError::InvalidProfile);
+    }
+    let backend = app.state::<crate::backend::Backend>();
+    let url = backend.url.lock().map_err(|_| SshError::LocalStorageFailed)?
+        .clone().ok_or(SshError::InvalidProfile)?;
+    let context = app.state::<crate::mcp::Service>().inner.lock().map_err(|_| SshError::LocalStorageFailed)?
+        .context(url.to_string()).map_err(|_| SshError::InvalidProfile)?;
+    let lock_epoch = crate::platform::lock_epoch();
+    if context.organization != organization { return Err(SshError::InvalidProfile); }
+    check_copy_context(app, &context, lock_epoch)?;
+    let path = format!("api/i7y/project-copy/v1/projects/{project_id}");
+    let record = crate::mcp::api(app, "GET", &path, vec![], None, None, None, Some(&context)).await.map_err(|error| {
+        if error.starts_with("Transport outcome unknown") || error == "Response interrupted; outcome unknown" {
+            SshError::ConnectionFailed
+        } else {
+            SshError::InvalidProfile
+        }
+    })?;
+    if !record_matches_target(&record, organization, project_id, target) {
+        return Err(SshError::InvalidProfile);
+    }
+    check_copy_context(app, &context, lock_epoch)?;
+    Ok((context, lock_epoch))
 }
 
 fn release_files() -> BTreeMap<&'static str, &'static str> {
@@ -113,6 +161,14 @@ fn release_files() -> BTreeMap<&'static str, &'static str> {
             include_str!("../../../automation/recipes/files/wordpress-configure.sh"),
         ),
         (
+            "recipes/files/wordpress-review.sh",
+            include_str!("../../../automation/recipes/files/wordpress-review.sh"),
+        ),
+        (
+            "recipes/files/wordpress-publish.sh",
+            include_str!("../../../automation/recipes/files/wordpress-publish.sh"),
+        ),
+        (
             "recipes/files/wordpress-finalize.sh",
             include_str!("../../../automation/recipes/files/wordpress-finalize.sh"),
         ),
@@ -151,12 +207,14 @@ pub async fn project_copy_preview(
     app: tauri::AppHandle,
     state: tauri::State<'_, crate::backend::Backend>,
     organization: String,
+    project_id: String,
     target: CopyTarget,
 ) -> Result<Value, SshError> {
     target.validate()?;
     if organization.is_empty() || organization.len() > 128 {
         return Err(SshError::InvalidProfile);
     }
+    let (context, lock_epoch) = authorize_copy(&app, &organization, &project_id, &target).await?;
     let path = directory(&app, &state)?;
     let profile = read_profile(&path.join("profile.json"))?.ok_or(SshError::InvalidProfile)?;
     for entry in fs::read_dir(&path).map_err(|_| SshError::LocalStorageFailed)? {
@@ -172,6 +230,9 @@ pub async fn project_copy_preview(
         if let Ok(bytes) = fs::read(candidate.join("review.json")) {
             if let Ok(review) = serde_json::from_slice::<Value>(&bytes) {
                 if review["organization"] == organization
+                    && review["project_id"] == project_id
+                    && review["user"] == context.user
+                    && review["backend"] == context.backend
                     && review["target"] == serde_json::to_value(&target).map_err(|_| SshError::InvalidProfile)?
                     && review["profile"] == serde_json::to_value(&profile).map_err(|_| SshError::InvalidProfile)? {
                     return Ok(review["preview"].clone());
@@ -196,15 +257,17 @@ pub async fn project_copy_preview(
     let request = json!({"operation_id": operation_id, "source_path": target.source_path, "source_domain": target.source_domain, "destination_domain": target.destination_domain});
     private_write(&temporary.join("progress.json"), &serde_json::to_vec(&json!({"organization": organization})).map_err(|_| SshError::LocalStorageFailed)?)?;
     let _ = app.emit("project-copy-started", json!({"operation_id": operation_id, "phase": "preview"}));
+    let worker_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let known_hosts = temporary.join("known_hosts");
         private_write(&known_hosts, profile.known_host_entry()?.as_bytes())?;
         let files = release_files();
         let payload = json!({"address": target.address, "port": target.port, "phase": "preview", "request": request, "files": files});
+        check_copy_context(&worker_app, &context, lock_epoch)?;
         let result = ssh::run_ansible_release(&profile, &known_hosts, serde_json::to_vec(&payload).map_err(|_| SshError::InvalidProfile)?)?;
         if result.get("error").is_none() {
             if result["release"] != release_id(&files) || result["operation_id"] != operation_id || result["fingerprint"].as_str().map(|v| v.len()) != Some(64) { return Err(SshError::InvalidDiagnostic); }
-            private_write(&temporary.join("review.json"), &serde_json::to_vec(&json!({"organization": organization, "profile": profile, "target": target, "request": request, "preview": result})).map_err(|_| SshError::LocalStorageFailed)?)?;
+            private_write(&temporary.join("review.json"), &serde_json::to_vec(&json!({"organization": organization, "project_id": project_id, "user": context.user, "backend": context.backend, "profile": profile, "target": target, "request": request, "preview": result})).map_err(|_| SshError::LocalStorageFailed)?)?;
         }
         Ok(result)
     }).await.map_err(|_| SshError::ConnectionFailed)?
@@ -230,6 +293,9 @@ pub async fn project_copy_execute(
     let target: CopyTarget =
         serde_json::from_value(review["target"].clone()).map_err(|_| SshError::InvalidProfile)?;
     target.validate()?;
+    let project_id = review["project_id"].as_str().ok_or(SshError::InvalidProfile)?;
+    let (context, lock_epoch) = authorize_copy(&app, &organization, project_id, &target).await?;
+    if review["user"] != context.user || review["backend"] != context.backend { return Err(SshError::InvalidProfile); }
     let profile = read_profile(&path.join("profile.json"))?.ok_or(SshError::InvalidProfile)?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -249,12 +315,18 @@ pub async fn project_copy_execute(
     if !was_started && review["preview"]["expires_at"].as_u64().unwrap_or(0) < now {
         return Ok(json!({"error": "The preview expired. Review the copy again.", "refresh_preview": true}));
     }
-    private_write(&temporary.join("execution-started"), b"started")?;
-    let _ = app.emit("project-copy-started", json!({"operation_id": operation_id, "phase": "execute"}));
+    let worker_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        check_copy_context(&worker_app, &context, lock_epoch)?;
+        private_write(&temporary.join("execution-started"), b"started")?;
+        let _ = worker_app.emit("project-copy-started", json!({"operation_id": operation_id, "phase": "execute"}));
         let mut request = review["request"].clone();
         request["fingerprint"] = review["preview"]["fingerprint"].clone();
         let payload = json!({"address": target.address, "port": target.port, "phase": "execute", "request": request, "expected_runtime": review["preview"]["runtime"], "files": release_files()});
+        if let Err(error) = check_copy_context(&worker_app, &context, lock_epoch) {
+            if !was_started { let _ = fs::remove_file(temporary.join("execution-started")); }
+            return Err(error);
+        }
         let outcome = ssh::run_ansible_release(&profile, &temporary.join("known_hosts"), serde_json::to_vec(&payload).map_err(|_| SshError::InvalidProfile)?);
         let _ = fs::remove_file(temporary.join("execution-running"));
         let mut result = outcome?;
@@ -297,6 +369,21 @@ mod tests {
         assert_eq!(release_change(false)["refresh_preview"], true);
         assert!(release_change(true).get("refresh_preview").is_none());
         assert!(release_change(true)["error"].as_str().unwrap().contains("original version"));
+    }
+    #[test]
+    fn authorized_inventory_must_match_copy_target() {
+        let mut target = CopyTarget { address: "192.0.2.1".into(), port: 10222,
+            source_path: "/srv/source.example.com".into(), source_domain: "source.example.com".into(),
+            destination_domain: "copy.example.com".into() };
+        let record = json!({"id":"project12345678","organization":"org-a","address":"192.0.2.1",
+            "source_path":"/srv/source.example.com","source_domain":"source.example.com"});
+        assert!(record_matches_target(&record, "org-a", "project12345678", &target));
+        assert!(!record_matches_target(&record, "org-b", "project12345678", &target));
+        target.address = "192.0.2.2".into();
+        assert!(!record_matches_target(&record, "org-a", "project12345678", &target));
+        target.address = "192.0.2.1".into();
+        target.source_path = "/srv/other.example.com".into();
+        assert!(!record_matches_target(&record, "org-a", "project12345678", &target));
     }
     #[test]
     fn copy_targets_reject_patterns_and_command_parameters() {

@@ -12,6 +12,31 @@ import tempfile
 import uuid
 
 
+def allowed_helper_errors(source):
+    errors = set()
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name) or node.func.id not in ('require', 'CopyError') or not node.args:
+            continue
+        try:
+            value = ast.literal_eval(node.args[-1])
+        except (ValueError, TypeError, SyntaxError):
+            continue
+        if isinstance(value, str):
+            errors.add(value)
+    return errors
+
+
+def retryable_failure(detail, events, attempt, log):
+    pending = ('A previous copy attempt requires reconciliation before retry', 'Another project copy requires completion or reconciliation')
+    if isinstance(detail, dict) and detail.get('name') == 'Recheck the preview and reserve the operation' and any(reason in log for reason in pending) and 'UNREACHABLE!' not in log:
+        return True
+    backup_released = any(event.get('attempt') == attempt and event.get('name') == 'Release the confirmed stopped backup attempt' and event.get('state') == 'completed' for event in events)
+    if backup_released and isinstance(detail, dict) and detail.get('name') == 'Back up the source database without stopping it' and detail.get('rc') in (124, 137) and 'UNREACHABLE!' not in log:
+        return True
+    released = any(event.get('attempt') == attempt and event.get('name') == 'Release the completed health-check attempt' and event.get('state') == 'completed' for event in events)
+    return released and isinstance(detail, dict) and detail.get('name') == 'Verify the copied site HTTP response' and detail.get('error') == 'The copied site did not return a successful HTTP response' and 'UNREACHABLE!' not in log
+
+
 def main():
     os.umask(0o077)
     payload = json.load(sys.stdin)
@@ -115,71 +140,77 @@ def main():
             'ansible_ssh_common_args': '-o StrictHostKeyChecking=yes -o BatchMode=yes -o ForwardAgent=no'}}}}}}
         (request / 'inventory.json').write_text(json.dumps(inventory))
         result_path = request / 'result.json'
-        parameters = {'i7y_request': payload['request'], 'i7y_phase': payload['phase'], 'i7y_result_path': str(result_path)}
+        attempt_id = uuid.uuid4().hex
+        parameters = {'i7y_request': payload['request'], 'i7y_phase': payload['phase'], 'i7y_result_path': str(result_path), 'i7y_attempt_id': attempt_id}
         (request / 'parameters.json').write_text(json.dumps(parameters))
         env = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'HOME': str(Path.home()), 'LANG': 'C'}
         env.update(LC_ALL='C', ANSIBLE_CONFIG=str(release / 'ansible/ansible.cfg'), ANSIBLE_HOST_KEY_CHECKING='True', ANSIBLE_NOCOLOR='1')
         logfile = root / ('operation-' + payload['request']['operation_id'] + '-' + payload['phase'] + '.log')
-        env.update(I7Y_EVENTS_PATH=str(logfile.with_suffix('.events.jsonl')), I7Y_ATTEMPT_ID=uuid.uuid4().hex, ANSIBLE_FILTER_PLUGINS=str(release / 'ansible/filter_plugins'), ANSIBLE_CALLBACK_PLUGINS=str(release / 'ansible/callback_plugins'), ANSIBLE_CALLBACK_WHITELIST='i7y_progress', ANSIBLE_CALLBACKS_ENABLED='i7y_progress')
-        execution_lock = (root / ('operation-' + payload['request']['operation_id'] + '.lock')).open('a')
-        try:
-            fcntl.flock(execution_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            print(json.dumps({'error': 'This copy is already running. Wait for it to finish.'}))
-            return 1
-        with logfile.with_suffix('.events.jsonl').open('a') as events:
-            events.write(json.dumps({'attempt': env['I7Y_ATTEMPT_ID'], 'state': 'started'}) + '\n')
-        with logfile.open('ab') as log:
-            log.write(b'\nI7Y_ATTEMPT\n')
-            log.flush()
-            outcome = subprocess.run(['/usr/bin/ansible-playbook', '-i', str(request / 'inventory.json'),
-                str(release / 'ansible/playbooks/project-copy.yml'), '-e', '@' + str(request / 'parameters.json')],
-                stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=env, timeout=1100)
-        if outcome.returncode != 0 or not result_path.is_file():
-            attempt_log = logfile.read_text(errors='replace').rsplit('I7Y_ATTEMPT\n', 1)[-1]
-            if '\nPLAY [' in attempt_log:
-                attempt_log = attempt_log.rsplit('\nPLAY [', 1)[-1]
-            message = 'This server needs a supported Python 3 runtime before project copy can run.' if 'I7Y_PYTHON_REQUIRED' in attempt_log else 'The playbook failed. Inspect the private operation log on the automation host.'
-            if 'Privileged source containers require a dedicated adapter' in attempt_log:
-                message = 'This project uses privileged containers. Copy requires a dedicated adapter.'
-            tree = ast.parse(files['ansible/files/project_copy.py'])
-            allowed_errors = {node.args[-1].s for node in ast.walk(tree)
-                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                and node.func.id in ('require', 'CopyError') and node.args
-                and isinstance(node.args[-1], ast.Str)}
-            for line in attempt_log.splitlines():
-                if line.startswith('fatal:') and '{' in line:
-                    try:
-                        detail = json.loads(line[line.index('{'):])
-                        reason = json.loads(detail.get('stdout', '{}')).get('error')
-                        if reason in allowed_errors:
-                            message = reason
-                    except (ValueError, TypeError, AttributeError):
-                        pass
-            error_detail = None
-            eventfile = logfile.with_suffix('.events.jsonl')
-            if eventfile.exists():
-                for line in eventfile.read_text().splitlines():
-                    try:
-                        event = json.loads(line)
-                        if event.get('attempt') == env['I7Y_ATTEMPT_ID'] and event.get('state') == 'failed':
-                            if message not in allowed_errors:
-                                message = event['error']
-                            error_detail = dict(event, error=message)
-                    except ValueError:
-                        pass
-            print(json.dumps({'error': message, 'error_detail': error_detail, 'operation_id': payload['request']['operation_id']}))
-            return 1
-        value = json.loads(result_path.read_text())
-        value['release'] = release_id
-        value['runtime'] = runtime
-        print(json.dumps(value))
+        env.update(I7Y_EVENTS_PATH=str(logfile.with_suffix('.events.jsonl')), I7Y_ATTEMPT_ID=attempt_id, ANSIBLE_FILTER_PLUGINS=str(release / 'ansible/filter_plugins'), ANSIBLE_CALLBACK_PLUGINS=str(release / 'ansible/callback_plugins'), ANSIBLE_CALLBACK_WHITELIST='i7y_progress', ANSIBLE_CALLBACKS_ENABLED='i7y_progress')
+        with (root / ('operation-' + payload['request']['operation_id'] + '.lock')).open('a') as execution_lock:
+            try:
+                fcntl.flock(execution_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                print(json.dumps({'error': 'This copy is already running. Wait for it to finish.', 'retryable': True}))
+                return 1
+            with logfile.with_suffix('.events.jsonl').open('a') as events:
+                events.write(json.dumps({'attempt': env['I7Y_ATTEMPT_ID'], 'state': 'started'}) + '\n')
+            with logfile.open('ab') as log:
+                log.write(b'\nI7Y_ATTEMPT\n')
+                log.flush()
+                outcome = subprocess.run(['/usr/bin/ansible-playbook', '-i', str(request / 'inventory.json'),
+                    str(release / 'ansible/playbooks/project-copy.yml'), '-e', '@' + str(request / 'parameters.json')],
+                    stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=env, timeout=1100)
+            if outcome.returncode != 0 or not result_path.is_file():
+                attempt_log = logfile.read_text(errors='replace').rsplit('I7Y_ATTEMPT\n', 1)[-1]
+                if '\nPLAY [' in attempt_log:
+                    attempt_log = attempt_log.rsplit('\nPLAY [', 1)[-1]
+                message = 'This server needs a supported Python 3 runtime before project copy can run.' if 'I7Y_PYTHON_REQUIRED' in attempt_log else 'The playbook failed. Inspect the private operation log on the automation host.'
+                if 'Privileged source containers require a dedicated adapter' in attempt_log:
+                    message = 'This project uses privileged containers. Copy requires a dedicated adapter.'
+                allowed_errors = allowed_helper_errors(files['ansible/files/project_copy.py'])
+                for line in attempt_log.splitlines():
+                    if line.startswith('fatal:') and '{' in line:
+                        try:
+                            detail = json.loads(line[line.index('{'):])
+                            reason = json.loads(detail.get('stdout', '{}')).get('error')
+                            if reason in allowed_errors:
+                                message = reason
+                        except (ValueError, TypeError, AttributeError):
+                            pass
+                error_detail = None
+                attempt_events = []
+                eventfile = logfile.with_suffix('.events.jsonl')
+                if eventfile.exists():
+                    for line in eventfile.read_text().splitlines():
+                        try:
+                            event = json.loads(line)
+                            attempt_events.append(event)
+                            if event.get('attempt') == env['I7Y_ATTEMPT_ID'] and event.get('state') == 'failed':
+                                if message not in allowed_errors:
+                                    message = event['error']
+                                error_detail = dict(event, error=message)
+                        except ValueError:
+                            pass
+                pending = 'A previous copy attempt requires reconciliation before retry'
+                if isinstance(error_detail, dict) and error_detail.get('name') == 'Recheck the preview and reserve the operation' and pending in attempt_log:
+                    message = pending
+                    error_detail['error'] = pending
+                print(json.dumps({'error': message, 'error_detail': error_detail, 'retryable': retryable_failure(error_detail, attempt_events, attempt_id, attempt_log), 'operation_id': payload['request']['operation_id']}))
+                return 1
+            value = json.loads(result_path.read_text())
+            value['release'] = release_id
+            value['runtime'] = runtime
+            print(json.dumps(value))
     return 0
 
 
 if __name__ == '__main__':
     try:
         sys.exit(main())
-    except (OSError, ValueError, KeyError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
+    except subprocess.TimeoutExpired:
+        print(json.dumps({'error': 'Automation request timed out. Inspect operation state before retrying.', 'retryable': True}))
+        sys.exit(1)
+    except (OSError, ValueError, KeyError, subprocess.CalledProcessError):
         print(json.dumps({'error': 'Automation request interrupted. Inspect operation state before retrying.'}))
         sys.exit(1)

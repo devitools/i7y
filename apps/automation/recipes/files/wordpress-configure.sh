@@ -23,6 +23,10 @@ set_constant DB_HOST "$database_host"
 for constant in WP_HOME WP_SITEURL; do
     if wp config has "$constant"; then wp config delete "$constant"; fi
 done
+if [ ! -f /opt/i7y/state/cron-original.json ]; then
+    php -r 'require "phar:///opt/i7y/tools/wp-cli.phar/vendor/wp-cli/wp-config-transformer/src/WPConfigTransformer.php"; $c=new WPConfigTransformer($argv[1], true); $exists=$c->exists("constant", "DISABLE_WP_CRON"); $data=["exists"=>$exists,"value"=>$exists?$c->get_value("constant", "DISABLE_WP_CRON"):null]; $p="/opt/i7y/state/cron-original.json"; $tmp=$p.".pending"; if (file_put_contents($tmp,json_encode($data),LOCK_EX)===false || !chmod($tmp,0600) || !rename($tmp,$p)) exit(1);' "$root/wp-config.php"
+fi
+set_constant DISABLE_WP_CRON true --raw
 set_constant I7Y_CLONE_REVIEW_REQUIRED true --raw
 for constant in AUTH_KEY SECURE_AUTH_KEY LOGGED_IN_KEY NONCE_KEY AUTH_SALT SECURE_AUTH_SALT LOGGED_IN_SALT NONCE_SALT; do
     if ! wp config has "$constant"; then set_constant "$constant" i7y-clone-pending-salt; fi

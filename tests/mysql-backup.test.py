@@ -24,8 +24,10 @@ elif "--execute=SELECT @@version" in sys.argv:
     print(os.environ.get("TEST_VERSION", "5.7.44"))
 elif any("ENGINE = 'MEMORY'" in arg for arg in sys.argv):
     print(os.environ.get("TEST_MEMORY", "0"))
-else:
+elif any("information_schema.TABLES" in arg for arg in sys.argv):
     print(os.environ.get("TEST_SHAPE", "12:0:0:0:0"))
+else:
+    sys.stdin.read()
 '''
 
 
@@ -36,6 +38,8 @@ class Backup(unittest.TestCase):
             for name in ["mysql", "mysqldump"]:
                 (root / name).write_text(CLIENT)
                 (root / name).chmod(0o700)
+            (root / "timeout").write_text("#!/bin/sh\nshift 3\nexec \"$@\"\n")
+            (root / "timeout").chmod(0o700)
             calls = root / "calls"
             result = subprocess.run(
                 ["sh", str(SCRIPT)], capture_output=True, text=True,
@@ -62,8 +66,9 @@ class Backup(unittest.TestCase):
     def test_mixed_memory_tables_use_consistent_locked_backup(self):
         result, calls = self.run_backup(TEST_MEMORY="1")
         self.assertEqual(result.returncode, 0)
-        self.assertIn("--lock-all-tables", calls[-1]["args"])
-        self.assertNotIn("--single-transaction", calls[-1]["args"])
+        dump = next(call for call in calls if call["tool"] == "mysqldump")
+        self.assertIn("--lock-all-tables", dump["args"])
+        self.assertNotIn("--single-transaction", dump["args"])
 
     def test_unsupported_schemas_never_start_dump(self):
         for shape in ["0:0:0:0:0", "12:1:0:0:0", "12:0:1:0:0", "12:0:0:1:0", "12:0:0:0:1", "unexpected:0:0:0:0"]:

@@ -111,6 +111,7 @@ require_once ABSPATH . 'wp-settings.php';
         (self.site / "wp-content/db.php").write_text("<?php file_put_contents('/opt/i7y/state/dropin-ran', 'unexpected');")
         (self.site / "wp-cli.yml").write_text("require:\n  - wp-content/mu-plugins/unsafe.php\n")
         config = self.site / "wp-config.php"
+        config.write_text(config.read_text().replace("<?php", "<?php\ndefine('DISABLE_WP_CRON', false);", 1))
         original_config = config.read_text()
         for constant in ["define('MULTISITE', true);", "define('WP_CONTENT_DIR', '/unsupported');"]:
             config.write_text(original_config.replace("<?php", "<?php\n" + constant, 1))
@@ -126,6 +127,7 @@ require_once ABSPATH . 'wp-settings.php';
         self.assertEqual(config.read_text(), original_config)
         phar.write_bytes(original_phar)
         self.web("sh /opt/i7y/tools/wordpress-configure.sh /var/www/html db")
+        self.assertEqual(self.wp("config get DISABLE_WP_CRON --format=json"), "true")
         self.assertFalse((self.state / "mu-ran").exists())
         self.assertFalse((self.state / "plugin-ran").exists())
         self.assertTrue((self.state / "quarantine/mu-plugins/unsafe.php").exists())
@@ -155,6 +157,8 @@ require_once ABSPATH . 'wp-settings.php';
         self.web("sh /opt/i7y/tools/wordpress-finalize.sh /var/www/html source.example.com source.example.com.copy.test db")
         self.assertFalse((self.state / "mu-ran").exists())
         self.assertFalse((self.state / "dropin-ran").exists())
+        self.web("sh /opt/i7y/tools/wordpress-publish.sh /var/www/html")
+        self.assertEqual(self.wp("config get DISABLE_WP_CRON --format=json"), "false")
         self.assertEqual(self.sql("SELECT value FROM unsupported_table", "copy_site").stdout.strip(), b"https://source.example.com.copy.test/plugin")
         self.assertNotIn(b"i7y_copy_row_id", self.sql("SHOW COLUMNS FROM unsupported_table", "copy_site").stdout)
         self.assertEqual(self.sql("SELECT id, value FROM indexed_table", "copy_site").stdout.strip(), b"1\thttps://source.example.com.copy.test/auto")

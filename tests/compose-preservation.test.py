@@ -45,12 +45,12 @@ services:
     volumes:
       - .:/var/www/app
 """
-        desired = yaml.safe_load(source.replace('source.example.com', 'copy.example.com'))
+        desired = yaml.safe_load(source.replace('VIRTUAL_HOST=source.example.com', 'VIRTUAL_HOST=copy.example.com'))
         desired['version'] = '3.5'
-        desired['volumes']['copy.example.com-data']['name'] = 'independent-data'
+        desired['volumes']['source.example.com-data']['name'] = 'independent-data'
         desired['networks']['internal']['name'] = 'independent-network'
         desired['networks']['internal']['ipam']['config'] = [{'subnet': '10.240.0.0/28'}]
-        web = desired['services']['copy.example.com-web']
+        web = desired['services']['source.example.com-web']
         web['container_name'] = '${WEB_HOST}'
         web['volumes'].extend(['/private/tools:/opt/i7y/tools:ro', '/private/state:/opt/i7y/state'])
         actual = module.preserve_compose(source, desired, 'source.example.com', 'copy.example.com')
@@ -62,10 +62,27 @@ services:
         self.assertIn('    privileged: true', actual)
         self.assertEqual(module.preserve_compose(actual, desired, 'source.example.com', 'copy.example.com'), actual)
         activated = copy.deepcopy(desired)
-        activated['services']['copy.example.com-web']['volumes'] = ['.:/var/www/app']
+        activated['services']['source.example.com-web']['volumes'] = ['.:/var/www/app']
         final = module.preserve_compose(source, activated, 'source.example.com', 'copy.example.com')
         self.assertIn('#      - LETSENCRYPT_HOST=copy.example.com', final)
         self.assertNotIn('/opt/i7y/', final)
+
+    def test_preserves_unrelated_longer_hosts(self):
+        source = 'services:\n  web:\n    environment:\n      VIRTUAL_HOST: source.example.com\n      UNRELATED: source.example.com.evil\n'
+        desired = yaml.safe_load(source)
+        desired['services']['web']['environment']['VIRTUAL_HOST'] = 'copy.example.com'
+        actual = module.preserve_compose(source, desired, 'source.example.com', 'copy.example.com')
+        self.assertEqual(yaml.safe_load(actual), desired)
+        self.assertIn('source.example.com.evil', actual)
+
+    def test_normalizes_mapping_subclasses_before_yaml_serialization(self):
+        class TaggedDict(dict):
+            pass
+        source = 'services:\n  web:\n    image: alpine\nnetworks:\n  internal: {}\n'
+        desired = yaml.safe_load(source)
+        desired['networks']['internal'] = TaggedDict({'ipam': TaggedDict({'config': [TaggedDict({'subnet': '10.240.0.0/28'})]})})
+        actual = module.preserve_compose(source, desired, 'source.example.com', 'copy.example.com')
+        self.assertEqual(yaml.safe_load(actual), desired)
 
     def test_replacing_block_environment_keeps_next_service_separate(self):
         source = "services:\n  database:\n    environment:\n      - MYSQL_DATABASE=${MYSQL_DATABASE}\n  web:\n    image: webdevops/php-nginx:8.3\n"

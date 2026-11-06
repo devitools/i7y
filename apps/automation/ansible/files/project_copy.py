@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import ipaddress
 import json
@@ -26,6 +27,11 @@ def domain(value):
     return isinstance(value, str) and len(value) <= 253 and '.' in value and all(
         re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', part)
         for part in value.split('.'))
+
+
+def replace_domain(value, source, destination):
+    pattern = r'(?<![a-z0-9-])' + re.escape(source) + r'(?![a-z0-9.-])'
+    return re.sub(pattern, lambda match: destination, value, flags=re.IGNORECASE)
 
 
 def digest(value):
@@ -103,7 +109,7 @@ def model(root, source_domain, destination_domain, containers):
         require(re.fullmatch(r'[a-f0-9]{64}', container['Id']) is not None, 'Invalid container identity')
         require(re.fullmatch(r'sha256:[a-f0-9]{64}', container['Image']) is not None, 'Invalid image identity')
         host = container['HostConfig']
-        require(not host.get('Devices') and not host.get('CapAdd'), 'Custom source devices or capabilities are unsupported')
+        require(not host.get('Privileged') and not host.get('Devices') and not host.get('CapAdd'), 'Privileged source containers or custom devices and capabilities are unsupported')
         require(host.get('NetworkMode') not in ('host', 'none') and not str(host.get('NetworkMode', '')).startswith('container:'), 'Unsupported source networking')
         require(not container['Config'].get('Labels', {}).get('com.docker.compose.oneoff') == 'True', 'One-off containers cannot be copied')
     dbmounts = db.get('Mounts', [])
@@ -131,7 +137,7 @@ def model(root, source_domain, destination_domain, containers):
         source = Path(mount['Source'])
         require(source.resolve() == source and (source == root or root in source.parents), 'A source mount escapes the project')
         target = Path(mount['Destination'])
-        require(target.is_absolute() and '..' not in target.parts and str(target) != '/' and not (target == Path('/opt/i7y') or Path('/opt/i7y') in target.parents or target in Path('/opt/i7y').parents), 'Unsupported mount target')
+        require(target.is_absolute() and '..' not in target.parts and str(target) != '/' and not any(char in str(target) or char in str(source) for char in (':', '\n', '\r')) and not (target == Path('/opt/i7y') or Path('/opt/i7y') in target.parents or target in Path('/opt/i7y').parents), 'Unsupported mount target')
         relative = source.relative_to(root)
         mounts.append({'relative': str(relative), 'target': str(target), 'read_only': not mount.get('RW', True)})
         if document == target or target in document.parents:
@@ -226,6 +232,24 @@ def load_plan(request):
 def reserve(request):
     state, plan = load_plan(request)
     if (state / 'completed.json').is_file():
+        require(not (state / 'attempt.active').exists(), 'A previous copy attempt requires reconciliation before retry')
+        return reserve_started(request, state, plan)
+    attempt = request.get('attempt_id', '')
+    require(re.fullmatch(r'[a-f0-9]{32}', attempt) is not None, 'Invalid copy attempt identifier')
+    active = state / 'attempt.active'
+    try:
+        private_json(active, {'attempt_id': attempt})
+    except FileExistsError:
+        raise CopyError('A previous copy attempt requires reconciliation before retry')
+    try:
+        return reserve_started(request, state, plan)
+    except Exception:
+        active.unlink()
+        raise
+
+
+def reserve_started(request, state, plan):
+    if (state / 'completed.json').is_file():
         completed = json.loads((state / 'completed.json').read_text())
         verified = json.loads((state / 'verified.json').read_text())
         require(completed.get('review_required') is False and verified.get('source') == plan['source']['source_domain'] and verified.get('destination') == plan['source']['destination_domain'], 'Completed operation state is invalid')
@@ -262,7 +286,7 @@ def reserve(request):
     return dict(public_plan(plan['source']), state_path=str(state), database_id=plan['source']['database_id'])
 
 
-def available_subnet():
+def available_subnet(reserved=()):
     ids = command(['docker', 'network', 'ls', '-q']).split()
     networks = json.loads(command(['docker', 'network', 'inspect'] + ids)) if ids else []
     used = [ipaddress.ip_network(item['Subnet']) for network in networks for item in (network.get('IPAM', {}).get('Config') or []) if item.get('Subnet')]
@@ -270,10 +294,56 @@ def available_subnet():
         address = line.split()[0]
         if address != 'default':
             used.append(ipaddress.ip_network(address, strict=False))
+    used.extend(ipaddress.ip_network(subnet) for subnet in reserved)
     for candidate in ipaddress.ip_network('10.240.0.0/12').subnets(new_prefix=28):
         if not any(candidate.overlaps(other) for other in used if other.version == 4):
             return str(candidate)
     raise CopyError('No unused private network range is available')
+
+
+def isolated_compose(compose, database_service, web_service, network_name, subnet):
+    isolated = copy.deepcopy(compose)
+    require(set(isolated.get('services', {})) == {database_service, web_service}, 'Copy requires exactly two services')
+    for service in isolated['services'].values():
+        require(not service.get('privileged') and not service.get('cap_add') and not service.get('devices'), 'Privileged source containers require a dedicated adapter')
+        for key in ('network_mode', 'pid', 'ipc', 'uts', 'userns_mode', 'security_opt', 'device_cgroup_rules', 'runtime', 'sysctls', 'volumes_from', 'links', 'extra_hosts', 'dns', 'dns_opt', 'dns_search', 'use_api_socket', 'configs', 'secrets', 'build'):
+            require(not service.get(key), 'Custom container isolation settings require a dedicated adapter')
+        dropped = service.get('cap_drop') or []
+        require(isinstance(dropped, list) and all(isinstance(item, str) for item in dropped), 'Unsupported capability configuration')
+        service['cap_drop'] = list(dict.fromkeys(dropped + ['NET_RAW', 'NET_ADMIN']))
+        service['security_opt'] = ['no-new-privileges:true']
+        service.pop('ports', None)
+        service.pop('depends_on', None)
+        service.pop('deploy', None)
+        service['restart'] = 'no'
+        service['networks'] = ['i7y_review']
+    isolated['networks'] = {'i7y_review': {'name': network_name, 'driver': 'bridge', 'internal': True,
+        'enable_ipv6': False, 'driver_opts': {'com.docker.network.bridge.gateway_mode_ipv4': 'isolated'},
+        'ipam': {'config': [{'subnet': subnet}]}}}
+    return isolated
+
+
+def require_isolated_network(network, containers, expected_name):
+    require(network.get('Name') == expected_name and network.get('Driver') == 'bridge' and network.get('Internal') is True,
+            'The review network is not internal')
+    require(not network.get('EnableIPv6') and network.get('Options', {}).get('com.docker.network.bridge.gateway_mode_ipv4') == 'isolated',
+            'The review network does not provide an isolated gateway')
+    configs = network.get('IPAM', {}).get('Config') or []
+    require(configs and all(not config.get('Gateway') for config in configs), 'The review network has a host gateway')
+    expected_ids = set()
+    for container in containers:
+        host = container.get('HostConfig') or {}
+        require(not host.get('Privileged') and not host.get('CapAdd') and not host.get('Devices') and not host.get('PortBindings') and not host.get('PublishAllPorts'),
+                'A review container has unsafe privileges or published ports')
+        dropped = {str(item).upper().replace('CAP_', '', 1) if str(item).upper().startswith('CAP_') else str(item).upper() for item in (host.get('CapDrop') or [])}
+        require({'NET_RAW', 'NET_ADMIN'}.issubset(dropped) or 'ALL' in dropped, 'A review container can alter network traffic')
+        require('no-new-privileges:true' in (host.get('SecurityOpt') or []), 'A review container can gain privileges')
+        settings = container.get('NetworkSettings') or {}
+        require(not any((settings.get('Ports') or {}).values()), 'A review container has published ports')
+        require(set(settings.get('Networks') or {}) == {expected_name},
+                'A review container is connected to an unexpected network')
+        expected_ids.add(container['Id'])
+    require(set((network.get('Containers') or {}).keys()) == expected_ids, 'The review network has unexpected containers')
 
 
 def prepare(request):
@@ -287,10 +357,20 @@ def prepare(request):
     require(manifest(root) == value['files'], 'Source files changed since preview')
     compose = json.loads((state / 'source-compose.json').read_text())
     volume_names = command(['docker', 'volume', 'ls', '--format', '{{.Name}}']).splitlines()
-    for key in compose.get('volumes', {}):
-        key = key.replace(value['source_domain'], value['destination_domain'])
+    internal_networks = [key for key, definition in compose.get('networks', {}).items() if not (definition or {}).get('external')]
+    network_names = command(['docker', 'network', 'ls', '--format', '{{.Name}}']).splitlines()
+    review_network = value['network_name'] + '-review'
+    require(review_network not in network_names, 'Destination Docker resource already exists')
+    for key in internal_networks:
+        name = value['network_name'] + '-' + digest(replace_domain(key, value['source_domain'], value['destination_domain']))[:12]
+        require(name not in network_names, 'Destination Docker resource already exists')
+    for key, definition in compose.get('volumes', {}).items():
+        definition = definition or {}
+        require(isinstance(definition, dict) and not definition.get('external') and not definition.get('driver_opts') and definition.get('driver', 'local') == 'local', 'Custom or external source volumes require a dedicated adapter')
+        key = replace_domain(key, value['source_domain'], value['destination_domain'])
         require(value['volume_name'] + '-' + key not in volume_names, 'Destination Docker resource already exists')
     require({k: v for k, v in inspect(plan['request'], include_files=False).items() if k != 'files'} == {k: v for k, v in value.items() if k != 'files'}, 'Source container configuration changed')
+    require(not (state / 'backup.pending').exists(), 'Backup outcome requires reconciliation before retry')
     backup = state / 'database.sql'
     require(backup.is_file() and backup.stat().st_size > 0, 'Verified database backup required before copying files')
     backup_hash = hashlib.sha256()
@@ -315,15 +395,17 @@ def prepare(request):
     credentials = {'MYSQL_DATABASE': database, 'MYSQL_USER': database, 'MYSQL_PASSWORD': secrets.token_hex(32)}
     dbcredentials = dict(credentials, MYSQL_ROOT_PASSWORD=secrets.token_hex(32))
     tools = str(state / 'tools')
-    network = value['network_name']
+    allocated_subnets = []
     services = compose['services']
-    db_service = value['database_service'].replace(value['source_domain'], value['destination_domain'])
-    web_service = value['web_service'].replace(value['source_domain'], value['destination_domain'])
+    db_service = replace_domain(value['database_service'], value['source_domain'], value['destination_domain'])
+    web_service = replace_domain(value['web_service'], value['source_domain'], value['destination_domain'])
     require(set(services) == {value['database_service'], value['web_service']}, 'Compose must contain the two selected services')
-    compose = json.loads(json.dumps(compose).replace(value['source_domain'], value['destination_domain']))
+    compose = json.loads(replace_domain(json.dumps(compose), value['source_domain'], value['destination_domain']))
     services = compose['services']
     db = services[db_service]
     web = services[web_service]
+    db['image'] = value['database_image']
+    web['image'] = value['web_image']
     db['container_name'] = '${MYSQL_HOST}'
     web['container_name'] = '${WEB_HOST}'
     for service in (db, web):
@@ -344,8 +426,10 @@ def prepare(request):
         definition = definition or {}
         if definition.get('external'):
             continue
-        definition['name'] = network
-        definition.setdefault('ipam', {})['config'] = [{'subnet': available_subnet()}]
+        definition['name'] = value['network_name'] + '-' + digest(key)[:12]
+        subnet = available_subnet(allocated_subnets)
+        allocated_subnets.append(subnet)
+        definition.setdefault('ipam', {})['config'] = [{'subnet': subnet}]
         compose['networks'][key] = definition
     compose['version'] = '3.5'
     web.setdefault('volumes', []).extend([tools + ':/opt/i7y/tools:ro', str(state / 'wordpress') + ':/opt/i7y/state'])
@@ -354,15 +438,24 @@ def prepare(request):
     require(compose_path.is_file() and not compose_path.is_symlink(), 'Standard Compose file required')
     shutil.copy2(str(compose_path), str(state / 'source-compose.yml'))
     env_path = destination / 'app' / '.env'
-    existing = env_path.read_text().replace(value['source_domain'], value['destination_domain']).splitlines() if env_path.exists() else []
+    existing = replace_domain(env_path.read_text(), value['source_domain'], value['destination_domain']).splitlines() if env_path.exists() else []
     values = dict(dbcredentials, MYSQL_HOST=value['database_name'], WEB_HOST=value['web_name'], COMPOSE_PROJECT_NAME='i7y-' + digest(value['destination_domain'])[:16])
     existing = [line for line in existing if line.split('=', 1)[0].strip() not in values]
     env_path.write_text('\n'.join(existing + [key + '=' + item for key, item in values.items()]) + '\n')
     os.chmod(str(env_path), 0o600)
     os.chown(str(env_path), owner.st_uid, owner.st_gid)
-    replace_json(state / 'compose.json', compose)
-    replace_json(compose_path, compose)
-    result = {'compose_path': str(compose_path), 'state_path': str(state), 'wordpress_root': value['wordpress_root'], 'database_name': value['database_name'], 'database_service': db_service, 'web_service': web_service, 'backup_sha256': backup_sha256}
+    review_subnet = available_subnet(allocated_subnets)
+    review_compose = isolated_compose(compose, db_service, web_service, review_network, review_subnet)
+    web_mounts = [str(destination / mount['relative']) + ':' + mount['target'] + (':ro' if mount['read_only'] else '') for mount in value['mounts']]
+    review_compose['services'][web_service]['volumes'] = web_mounts + [tools + ':/opt/i7y/tools:ro', str(state / 'wordpress') + ':/opt/i7y/state']
+    db_mounts = review_compose['services'][db_service].get('volumes', [])
+    data_mounts = [mount for mount in db_mounts if isinstance(mount, str) and len(mount.split(':')) in (2, 3) and mount.split(':')[1] == '/var/lib/mysql']
+    require(len(data_mounts) == 1 and data_mounts[0].split(':')[0] in review_compose.get('volumes', {}), 'The review database requires one named volume')
+    review_compose['services'][db_service]['volumes'] = data_mounts
+    replace_json(state / 'publish-compose.json', compose)
+    replace_json(state / 'compose.json', review_compose)
+    replace_json(compose_path, review_compose)
+    result = {'review_network': review_network, 'compose_path': str(compose_path), 'state_path': str(state), 'wordpress_root': value['wordpress_root'], 'database_name': value['database_name'], 'database_service': db_service, 'web_service': web_service, 'backup_sha256': backup_sha256}
     private_json(state / 'prepared.json', result)
     return result
 
@@ -370,9 +463,10 @@ def prepare(request):
 def activate(request):
     state, plan = load_plan(request)
     require((state / 'prepared.json').is_file(), 'Copy is not prepared')
+    require((state / 'verified.json').is_file(), 'The isolated copy must pass verification before publication')
     configuration = state / 'compose.json'
-    compose = json.loads(configuration.read_text())
-    web = compose['services'][plan['source']['web_service'].replace(plan['source']['source_domain'], plan['source']['destination_domain'])]
+    compose = json.loads((state / 'publish-compose.json').read_text())
+    web = compose['services'][replace_domain(plan['source']['web_service'], plan['source']['source_domain'], plan['source']['destination_domain'])]
     web['volumes'] = [mount for mount in web['volumes'] if not mount.endswith(':/opt/i7y/tools:ro') and not mount.endswith(':/opt/i7y/state')]
     for path in [configuration, Path(plan['source']['destination_root']) / 'app/docker-compose.yml']:
         temporary = path.with_name(path.name + '.pending')
@@ -382,9 +476,79 @@ def activate(request):
     return {'compose_path': str(configuration)}
 
 
+def inspect_review_network(request, require_database, require_web=False):
+    state, plan = load_plan(request)
+    prepared = json.loads((state / 'prepared.json').read_text())
+    name = prepared['review_network']
+    networks = json.loads(command(['docker', 'network', 'inspect', name]))
+    require(len(networks) == 1, 'Review network not found')
+    network = networks[0]
+    ids = list((network.get('Containers') or {}).keys())
+    containers = json.loads(command(['docker', 'inspect'] + ids)) if ids else []
+    allowed_names = {plan['source']['database_name'], plan['source']['web_name']}
+    require(all(item.get('Name', '').lstrip('/') in allowed_names for item in containers), 'The review network has unexpected containers')
+    expected_images = {plan['source']['database_name']: plan['source']['database_image'], plan['source']['web_name']: plan['source']['web_image']}
+    require(all(item.get('Image') == expected_images[item.get('Name', '').lstrip('/')] for item in containers), 'A review container is using an unapproved image')
+    if require_database:
+        require(any(item.get('Name', '').lstrip('/') == plan['source']['database_name'] for item in containers), 'Review database is not connected')
+    if require_web:
+        require(any(item.get('Name', '').lstrip('/') == plan['source']['web_name'] for item in containers), 'Review web service is not connected')
+    require_isolated_network(network, containers, name)
+    return {'verified': True}
+
+
+def verify_network_prestart(request):
+    return inspect_review_network(request, False)
+
+
+def verify_isolation(request, require_web=False):
+    return inspect_review_network(request, True, require_web)
+
+
+def release_backup_attempt(request):
+    state, plan = load_plan(request)
+    attempt = request.get('attempt_id', '')
+    require(re.fullmatch(r'[a-f0-9]{32}', attempt) is not None, 'Invalid copy attempt identifier')
+    active = state / 'attempt.active'
+    require(active.is_file() and json.loads(active.read_text()).get('attempt_id') == attempt, 'Copy attempt owner mismatch')
+    require(not (state / 'backup.pending').exists() and not (state / 'database.sql').exists(), 'Backup outcome requires reconciliation before retry')
+    log = state / 'backup.stderr'
+    require(log.is_file() and 'I7Y_BACKUP_CLEAN' in log.read_text().splitlines(), 'Backup cleanup was not confirmed')
+    exec_ids = json.loads(command(['docker', 'inspect', '--format', '{{json .ExecIDs}}', plan['source']['database_id']]))
+    require(not exec_ids, 'The source database still has active exec sessions')
+    active.unlink()
+    return {'released': True}
+
+
+def release_health_attempt(request):
+    state, _ = load_plan(request)
+    attempt = request.get('attempt_id', '')
+    require(re.fullmatch(r'[a-f0-9]{32}', attempt) is not None, 'Invalid copy attempt identifier')
+    active = state / 'attempt.active'
+    require(active.is_file() and json.loads(active.read_text()).get('attempt_id') == attempt, 'Copy attempt owner mismatch')
+    require((state / 'restored').is_file() and (state / 'finalized').is_file() and not (state / 'activated.json').exists() and not (state / 'backup.pending').exists(), 'Copy attempt requires reconciliation')
+    active.unlink()
+    return {'released': True}
+
+
+def cleanup_isolation(request):
+    state, _ = load_plan(request)
+    require((state / 'activated.json').is_file(), 'The isolated copy has not been activated')
+    name = json.loads((state / 'prepared.json').read_text())['review_network']
+    names = command(['docker', 'network', 'ls', '--format', '{{.Name}}']).splitlines()
+    if name not in names:
+        return {'removed': False}
+    networks = json.loads(command(['docker', 'network', 'inspect', name]))
+    require(len(networks) == 1, 'Review network not found')
+    require_isolated_network(networks[0], [], name)
+    command(['docker', 'network', 'rm', name])
+    return {'removed': True}
+
+
 def verify(request):
     state, plan = load_plan(request)
     value = plan['source']
+    verify_isolation(request, True)
     require((state / 'restored').is_file() and (state / 'finalized').is_file(), 'Database restoration and domain configuration must finish before verification')
     receipt_path = state / 'wordpress/domain-contract.json'
     require(receipt_path.is_file(), 'The verified WordPress domain contract is missing')
@@ -423,19 +587,20 @@ def finish(request):
             os.chown(str(path), owner.st_uid, owner.st_gid)
     os.chown(str(destination), owner.st_uid, owner.st_gid)
     os.chmod(str(destination), stat.S_IMODE(owner.st_mode))
-    replace_json(state / 'completed.json', {'completed_at': int(time.time()), 'review_required': False})
     lock = state.parent / 'copy.lock'
-    if not lock.exists():
-        return dict(public_plan(plan['source']), review_required=False, operation_id=request['operation_id'])
-    require(json.loads((lock / 'owner.json').read_text())['operation_id'] == request['operation_id'], 'Operation lock owner mismatch')
+    active = state / 'attempt.active'
+    require(lock.is_dir() and (lock / 'owner.json').is_file() and json.loads((lock / 'owner.json').read_text()).get('operation_id') == request['operation_id'], 'Operation lock owner mismatch')
+    require(active.is_file() and json.loads(active.read_text()).get('attempt_id') == request.get('attempt_id'), 'Copy attempt owner mismatch')
+    replace_json(state / 'completed.json', {'completed_at': int(time.time()), 'review_required': False})
     (lock / 'owner.json').unlink()
     lock.rmdir()
+    active.unlink()
     return dict(public_plan(plan['source']), review_required=False, operation_id=request['operation_id'])
 
 
 def main():
     try:
-        require(len(sys.argv) == 3 and sys.argv[1] in ('preview', 'reserve', 'prepare', 'activate', 'verify', 'finish'), 'Unsupported project copy phase')
+        require(len(sys.argv) == 3 and sys.argv[1] in ('preview', 'reserve', 'prepare', 'activate', 'verify_network_prestart', 'verify_isolation', 'release_backup_attempt', 'release_health_attempt', 'cleanup_isolation', 'verify', 'finish'), 'Unsupported project copy phase')
         request = json.loads(Path(sys.argv[2]).read_text())
         result = globals()[sys.argv[1]](request)
         print(json.dumps(result, sort_keys=True))

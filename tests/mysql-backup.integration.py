@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 import subprocess
 import time
+import tempfile
 import unittest
 import uuid
 
@@ -44,6 +45,24 @@ class MysqlBackup(unittest.TestCase):
         return subprocess.run(["docker", "exec", "-i", self.container, "sh", "-s"],
                               input=SCRIPT.read_bytes(), capture_output=True)
 
+    def test_memory_dump_timeout_releases_database_lock(self):
+        self.sql("CREATE TABLE timeout_fixture (id INT PRIMARY KEY) ENGINE=MEMORY; INSERT INTO timeout_fixture VALUES (1)")
+        self.addCleanup(self.sql, "DROP TABLE IF EXISTS timeout_fixture")
+        with tempfile.TemporaryDirectory() as directory:
+            fake = Path(directory) / 'mysqldump'
+            fake.write_text("#!/bin/sh\nfor arg in \"$@\"; do case \"$arg\" in --user=*) user=${arg#--user=} ;; esac; done\nexec mysql --no-defaults --protocol=socket --user=\"$user\" --execute=\"FLUSH TABLES WITH READ LOCK; SELECT SLEEP(90)\"\n")
+            fake.chmod(0o755)
+            subprocess.run(['docker', 'exec', self.container, 'mkdir', '-p', '/tmp/i7y-test-bin'], check=True, capture_output=True)
+            subprocess.run(['docker', 'cp', str(fake), self.container + ':/tmp/i7y-test-bin/mysqldump'], check=True, capture_output=True)
+            start = time.monotonic()
+            result = subprocess.run(['docker', 'exec', '-i', self.container, 'sh', '-c', 'PATH=/tmp/i7y-test-bin:$PATH sh -s'], input=SCRIPT.read_bytes(), capture_output=True, timeout=50)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(b'I7Y_BACKUP_CLEAN', result.stderr.splitlines())
+            self.assertLess(time.monotonic() - start, 45)
+            self.assertEqual(self.sql("SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE USER LIKE 'i7y\\_%'").stdout.strip(), b'0')
+            self.assertEqual(self.sql("SELECT COUNT(*) FROM mysql.user WHERE User LIKE 'i7y\\_%'").stdout.strip(), b'0')
+            self.sql('UPDATE timeout_fixture SET id=2 WHERE id=1')
+
     def test_independent_restore_and_unsupported_schema_rejection(self):
         self.sql("CREATE TABLE wp_options (id INT PRIMARY KEY, value LONGBLOB) ENGINE=InnoDB;"
                  "INSERT INTO wp_options VALUES (1, UNHEX('000102ff'));"
@@ -55,6 +74,7 @@ class MysqlBackup(unittest.TestCase):
         self.assertNotIn(b"CREATE DATABASE", backup.stdout)
         self.sql(backup.stdout.decode(), database="destination_site")
         self.assertEqual(self.sql("SELECT HEX(value) FROM wp_options", "destination_site").stdout.strip(), b"000102FF")
+        self.assertEqual(self.sql("SELECT id FROM transient_cache", "destination_site").stdout.strip(), b"7")
         self.sql("UPDATE wp_options SET value='independent'", "destination_site")
         self.assertEqual(self.sql("SELECT HEX(value) FROM wp_options").stdout.strip(), b"000102FF")
         for create, drop in [

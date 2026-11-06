@@ -20,16 +20,27 @@ The initial inspection expires after ten minutes; a started operation can resume
 using its original identifier. The first adapter supports running two-container
 WordPress / MySQL 5.7 projects on one host. Unsupported layouts fail explicitly.
 
-The source remains running. Backups use a consistent InnoDB transaction or a read
-lock when MEMORY tables are present. Files and database writes are not captured
-as one atomic application snapshot. The existing Compose service definitions,
-proxy network, plugins and theme settings are preserved. Independent credentials
-live in the copied project's private `.env`. The action does not configure DNS.
+The source remains running. Backups use a consistent InnoDB transaction or a global
+read lock when MEMORY tables are present. The locked dump is limited to 30 seconds,
+and its dedicated MySQL session must terminate before the backup can finish. A
+confirmed timeout releases its attempt for retry. If cleanup or the remote outcome
+cannot be confirmed, the pending marker remains and requires reconciliation. Files
+and database writes are not captured as one atomic application snapshot. The existing Compose service definitions,
+proxy network, plugins and theme settings are preserved. The destination is tested
+on an internal bridge with an isolated gateway and no published ports before it is
+connected to the proxy. This requires Docker Engine 28 or newer; incompatible
+network configurations stop the copy. Independent credentials live in the copied
+project's private `.env`. The action does not configure DNS.
 
 Completed backup, preparation, configuration, restoration and URL replacement steps
 are checkpointed. Resume reuses them. An incomplete restore may restart only the
 new destination database from the verified backup. A host-side file lock prevents
-concurrent execution of the same operation. Do not delete operation state manually.
+concurrent execution of the same operation. Each attempt also reserves a durable
+managed-host marker. A lost connection cannot bypass it; retries wait for the prior
+attempt to finish or a known safe failure to release it. An uncertain interrupted
+attempt stays blocked for reconciliation. The desktop makes up to three additional
+attempts, 30 seconds apart, for transient errors while it remains open. Do not
+delete operation state manually.
 
 The system Ansible 2.9.1 installation remains a legacy compatibility path. Select a
 supported ansible-core version only after controller and managed Python compatibility

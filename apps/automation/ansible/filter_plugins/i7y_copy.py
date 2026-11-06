@@ -38,7 +38,9 @@ class FilterModule(object):
 def preserve_compose(source, desired, source_domain, destination_domain):
     import json
     import yaml
-    text = source.replace(source_domain, destination_domain)
+    desired = json.loads(json.dumps(desired))
+    pattern = r'(?<![a-z0-9-])' + re.escape(source_domain) + r'(?![a-z0-9.-])'
+    text = re.sub(pattern, lambda match: destination_domain, source, flags=re.IGNORECASE)
     original = yaml.safe_load(text)
     tree = yaml.compose(text)
     edits = []

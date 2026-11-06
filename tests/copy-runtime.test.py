@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import unittest
 import tempfile
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -30,6 +31,75 @@ class RuntimeRejection(unittest.TestCase):
             self.assertEqual(result['attempt'], 'new')
             self.assertEqual(result['steps'], [])
             self.assertIsNone(result['failed_task'])
+
+    def test_retry_requires_completed_remote_release_and_transient_health_failure(self):
+        detail = {'name': 'Verify the copied site HTTP response', 'error': 'The copied site did not return a successful HTTP response'}
+        event = {'attempt': 'first', 'name': 'Release the completed health-check attempt', 'state': 'completed'}
+        self.assertTrue(module.retryable_failure(detail, [event], 'first', 'fatal'))
+        self.assertFalse(module.retryable_failure(detail, [], 'first', 'fatal'))
+        self.assertTrue(module.retryable_failure({'name':'Recheck the preview and reserve the operation'}, [], 'first', 'A previous copy attempt requires reconciliation before retry'))
+        self.assertFalse(module.retryable_failure({'name':'Other task'}, [], 'first', 'A previous copy attempt requires reconciliation before retry'))
+        self.assertTrue(module.retryable_failure({'name':'Recheck the preview and reserve the operation'}, [], 'first', 'Another project copy requires completion or reconciliation'))
+        self.assertFalse(module.retryable_failure(detail, [event], 'other', 'fatal'))
+        self.assertFalse(module.retryable_failure(detail, [event], 'first', 'UNREACHABLE!'))
+        self.assertFalse(module.retryable_failure({'name': detail['name'], 'error': 'Review network changed'}, [event], 'first', 'fatal'))
+        backup = {'name': 'Back up the source database without stopping it', 'rc': 137}
+        released = {'attempt': 'first', 'name': 'Release the confirmed stopped backup attempt', 'state': 'completed'}
+        self.assertTrue(module.retryable_failure(backup, [released], 'first', 'fatal'))
+        self.assertFalse(module.retryable_failure(backup, [], 'first', 'fatal'))
+
+    def test_runner_reports_retryable_after_realistic_health_events(self):
+        helper = (ROOT / 'apps/automation/ansible/files/project_copy.py').read_text()
+        request = {'address': '192.0.2.1', 'port': 10222, 'phase': 'execute', 'expected_runtime': 'fixture',
+                   'request': {'operation_id': 'a' * 32}, 'files': {'ansible/files/project_copy.py': helper}}
+        reason = 'The copied site did not return a successful HTTP response'
+        def run(_args, **kwargs):
+            kwargs['stdout'].write(('fatal: [selected]: FAILED! => ' + json.dumps({'stdout': json.dumps({'error': reason})}) + '\n').encode())
+            kwargs['stdout'].flush()
+            attempt = kwargs['env']['I7Y_ATTEMPT_ID']
+            events = [
+                {'attempt': attempt, 'name': 'Verify the copied site HTTP response', 'state': 'failed', 'error': 'generic', 'rc': 1},
+                {'attempt': attempt, 'name': 'Release the completed health-check attempt', 'state': 'completed'},
+                {'attempt': attempt, 'name': 'Verify the copied site HTTP response', 'state': 'failed', 'error': 'generic', 'rc': 1},
+            ]
+            with Path(kwargs['env']['I7Y_EVENTS_PATH']).open('a') as output:
+                for event in events:
+                    output.write(json.dumps(event) + '\n')
+            return SimpleNamespace(returncode=1)
+        with tempfile.TemporaryDirectory() as directory:
+            output = io.StringIO()
+            with patch.object(module.Path, 'home', return_value=Path(directory).resolve()), patch.object(module.sys, 'stdin', io.StringIO(json.dumps(request))), patch.object(module.subprocess, 'check_output', return_value=b'fixture\n'), patch.object(module.subprocess, 'run', side_effect=run), contextlib.redirect_stdout(output):
+                self.assertEqual(module.main(), 1)
+            result = json.loads(output.getvalue())
+            self.assertEqual(result['error'], reason)
+            self.assertTrue(result['retryable'])
+
+    def test_runner_reports_active_attempt_as_retryable(self):
+        helper = (ROOT / 'apps/automation/ansible/files/project_copy.py').read_text()
+        request = {'address': '192.0.2.1', 'port': 10222, 'phase': 'execute', 'expected_runtime': 'fixture',
+                   'request': {'operation_id': 'b' * 32}, 'files': {'ansible/files/project_copy.py': helper}}
+        pending = 'A previous copy attempt requires reconciliation before retry'
+        def run(_args, **kwargs):
+            kwargs['stdout'].write(('failure: ' + pending + '\n').encode())
+            kwargs['stdout'].flush()
+            event = {'attempt': kwargs['env']['I7Y_ATTEMPT_ID'], 'name': 'Recheck the preview and reserve the operation', 'state': 'failed', 'error': 'generic', 'rc': 1}
+            with Path(kwargs['env']['I7Y_EVENTS_PATH']).open('a') as output:
+                output.write(json.dumps(event) + '\n')
+            return SimpleNamespace(returncode=1)
+        with tempfile.TemporaryDirectory() as directory:
+            output = io.StringIO()
+            with patch.object(module.Path, 'home', return_value=Path(directory).resolve()), patch.object(module.sys, 'stdin', io.StringIO(json.dumps(request))), patch.object(module.subprocess, 'check_output', return_value=b'fixture\n'), patch.object(module.subprocess, 'run', side_effect=run), contextlib.redirect_stdout(output):
+                self.assertEqual(module.main(), 1)
+            result = json.loads(output.getvalue())
+            self.assertEqual(result['error'], pending)
+            self.assertEqual(result['error_detail']['error'], pending)
+            self.assertTrue(result['retryable'])
+
+    def test_helper_error_allowlist_supports_current_python(self):
+        source = (ROOT / 'apps/automation/ansible/files/project_copy.py').read_text()
+        errors = module.allowed_helper_errors(source)
+        self.assertIn('The copied site did not return a successful HTTP response', errors)
+        self.assertIn('A previous copy attempt requires reconciliation before retry', errors)
 
     def test_runtime_change_is_reported_before_playbook_starts(self):
         request = {'address': '192.0.2.1', 'port': 10222, 'phase': 'execute', 'expected_runtime': 'old runtime'}
