@@ -1,5 +1,6 @@
 export default {
   "incidents.viewAlert": "View alert",
+  "incidents.viewInGcp": "View in Google Cloud",
   "incidents.sourceAlertError": "Unable to load the source alert.",
   "incidents.startupSummary": "Open incidents: {count}",
   "incidents.startupHelp": "Open the incident list to review pending items.",
