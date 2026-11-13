@@ -1,0 +1,191 @@
+name: Build release artifacts
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release tag (vMAJOR.MINOR.PATCH); builds this main commit'
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.event.inputs.version || github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      sha: ${{ steps.release.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate release source
+        id: release
+        env:
+          RELEASE_TAG: ${{ inputs.version || github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          sha=$(git rev-parse HEAD)
+          git merge-base --is-ancestor "$sha" origin/main
+          if git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
+            test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$sha"
+          fi
+          if gh release view "$RELEASE_TAG" --json isDraft,targetCommitish >/tmp/release.json 2>/dev/null; then
+            python3 -c 'import json,os; d=json.load(open("/tmp/release.json")); assert d["isDraft"], "Release is already published"; assert d["targetCommitish"] == os.environ["GITHUB_SHA"], "Draft points to a different commit"'
+          fi
+          {
+            echo "tag=$RELEASE_TAG"
+            echo "version=${RELEASE_TAG#v}"
+            echo "sha=$sha"
+          } >> "$GITHUB_OUTPUT"
+  packages:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.4'
+          cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate source and build web
+        run: |
+          npm ci
+          npm test
+          npm run typecheck
+          npm run build:web
+          pip install PyYAML
+          python3 tests/project-copy.test.py
+          python3 tests/project-copy-backup.test.py
+          python3 tests/copy-runtime.test.py
+          cd agent
+          go test ./...
+      - name: Package web and agents
+        env:
+          I7Y_AGENT_VERSION: ${{ needs.prepare.outputs.version }}
+          I7Y_WINDOWS_AGENT_VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_SHA: ${{ needs.prepare.outputs.sha }}
+        run: |
+          sh agent/build.sh
+          mkdir -p release
+          tar -czf "release/i7y-web-${RELEASE_VERSION}.tar.gz" -C apps/web/dist .
+          cp agent/dist/i7y-agent-linux-* agent/dist/i7y-host-windows-*.exe release/
+          git archive --format=tar.gz --output="release/i7y-backend-source-${RELEASE_VERSION}.tar.gz" HEAD Dockerfile apps/backend deploy/compose.production.yaml
+          python3 -c 'import json,os; json.dump({"version":os.environ["RELEASE_VERSION"],"commit":os.environ["RELEASE_SHA"],"macos_signing":"ad-hoc"},open("release/build-info.json","w"),indent=2)'
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Build backend container archive
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_SHA: ${{ needs.prepare.outputs.sha }}
+        run: |
+          docker buildx build --platform linux/amd64,linux/arm64 --label "org.opencontainers.image.version=$RELEASE_VERSION" --label "org.opencontainers.image.revision=$RELEASE_SHA" --output "type=oci,dest=release/i7y-backend-${RELEASE_VERSION}.oci.tar" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server-and-agent
+          path: release/*
+          if-no-files-found: error
+          retention-days: 14
+  desktop:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.4'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install dependencies and set bundle version
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          npm ci
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          path = Path('apps/desktop/src-tauri/tauri.conf.json')
+          config = json.loads(path.read_text())
+          config['version'] = os.environ['RELEASE_VERSION']
+          path.write_text(json.dumps(config, indent=2) + '\n')
+          PY
+      - name: Test Rust components
+        run: |
+          cargo test --locked --manifest-path apps/desktop/core/Cargo.toml
+          cargo test --locked --manifest-path apps/desktop/mcp/Cargo.toml
+          node --import tsx apps/desktop/scripts/prepare-mcp.ts
+          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
+      - name: Build macOS app
+        env:
+          APPLE_SIGNING_IDENTITY: '-'
+        run: npm run build:desktop -- --bundles app,dmg
+      - name: Package macOS app
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          mkdir -p release
+          arch=$(rustc -vV | sed -n 's/^host: //p')
+          ditto -c -k --sequesterRsrc --keepParent apps/desktop/src-tauri/target/release/bundle/macos/i7y.app "release/i7y-${RELEASE_VERSION}-${arch}.app.zip"
+          cp apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg release/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.runner }}
+          path: release/*
+          if-no-files-found: error
+          retention-days: 14
+  draft-release:
+    needs: [prepare, packages, desktop]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+      - name: Attach artifacts to draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_SHA: ${{ needs.prepare.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd release && sha256sum ./* > SHA256SUMS)
+          if gh release view "$RELEASE_TAG" --json isDraft,targetCommitish >/tmp/release.json 2>/dev/null; then
+            python3 -c 'import json,os; d=json.load(open("/tmp/release.json")); assert d["isDraft"], "Release is already published"; assert d["targetCommitish"] == os.environ["RELEASE_SHA"], "Draft points to a different commit"'
+          else
+            gh release create "$RELEASE_TAG" --target "$RELEASE_SHA" --draft --title "i7y $RELEASE_TAG" --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" release/* --clobber
+          {
+            echo "### Release artifacts ready for review"
+            echo "Draft: https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"
+            echo "Commit: $RELEASE_SHA. macOS bundles use ad-hoc signing and are not notarized."
+          } >> "$GITHUB_STEP_SUMMARY"
