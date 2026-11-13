@@ -1,4 +1,4 @@
-FROM node:22.23.4-alpine AS frontend
+FROM --platform=$BUILDPLATFORM node:22.23.4-alpine AS frontend
 WORKDIR /app
 COPY package*.json ./
 COPY apps/web/package.json ./apps/web/package.json

@@ -119,6 +119,12 @@ jobs:
           node-version: '22.23.4'
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            apps/desktop/core -> target
+            apps/desktop/mcp -> target
+            apps/desktop/src-tauri -> target
       - name: Install dependencies and set bundle version
         env:
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
@@ -136,8 +142,8 @@ jobs:
         run: |
           cargo test --locked --manifest-path apps/desktop/core/Cargo.toml
           cargo test --locked --manifest-path apps/desktop/mcp/Cargo.toml
-          node --import tsx apps/desktop/scripts/prepare-mcp.ts
-          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
+          node --import tsx apps/desktop/scripts/prepare-mcp.ts --release
+          cargo test --release --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
       - name: Build macOS app
         env:
           APPLE_SIGNING_IDENTITY: '-'
