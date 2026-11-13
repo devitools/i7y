@@ -59,8 +59,8 @@ jobs:
           cache: npm
       - uses: actions/setup-go@v5
         with:
-          go-version-file: agent/go.mod
-          cache-dependency-path: agent/go.mod
+          go-version-file: apps/agent/go.mod
+          cache-dependency-path: apps/agent/go.mod
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -74,7 +74,7 @@ jobs:
           python3 tests/project-copy.test.py
           python3 tests/project-copy-backup.test.py
           python3 tests/copy-runtime.test.py
-          cd agent
+          cd apps/agent
           go test ./...
       - name: Package web and agents
         env:
@@ -83,10 +83,10 @@ jobs:
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
           RELEASE_SHA: ${{ needs.prepare.outputs.sha }}
         run: |
-          sh agent/build.sh
+          sh apps/agent/build.sh
           mkdir -p release
           tar -czf "release/i7y-web-${RELEASE_VERSION}.tar.gz" -C apps/web/dist .
-          cp agent/dist/i7y-agent-linux-* agent/dist/i7y-host-windows-*.exe release/
+          cp apps/agent/dist/i7y-agent-linux-* apps/agent/dist/i7y-host-windows-*.exe release/
           git archive --format=tar.gz --output="release/i7y-backend-source-${RELEASE_VERSION}.tar.gz" HEAD Dockerfile apps/backend deploy/compose.production.yaml
           python3 -c 'import json,os; json.dump({"version":os.environ["RELEASE_VERSION"],"commit":os.environ["RELEASE_SHA"],"macos_signing":"ad-hoc"},open("release/build-info.json","w"),indent=2)'
       - uses: docker/setup-qemu-action@v3
