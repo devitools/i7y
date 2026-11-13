@@ -1,6 +1,16 @@
 import { routeHash } from './routes'
 import { containerStateText } from './telemetry-summary'
 
+export function incidentSourceUrl(row: any) {
+  if (row?.origin !== 'gcp' || typeof row.evidence?.url !== 'string') return null
+  try {
+    const url = new URL(row.evidence.url)
+    return url.protocol === 'https:' && url.hostname === 'console.cloud.google.com' && !url.username && !url.password ? url.href : null
+  } catch {
+    return null
+  }
+}
+
 export function incidentTargetHref(row: any) {
   const valid = (id: unknown) => typeof id === 'string' && /^[a-z0-9]{15}$/.test(id)
   if (row.resource_type === 'server' && valid(row.server_id || row.resource_id)) return routeHash({view:'telemetry',server:row.server_id || row.resource_id})

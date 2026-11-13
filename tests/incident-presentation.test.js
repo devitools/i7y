@@ -1,6 +1,6 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {incidentTargetHref,incidentMetric} from '../apps/web/src/incident-presentation.ts'
+import {incidentTargetHref,incidentMetric,incidentSourceUrl} from '../apps/web/src/incident-presentation.ts'
 import {containerStateText} from '../apps/web/src/telemetry-summary.ts'
 test('links inventory targets without inventing external destinations',()=>{
  assert.match(incidentTargetHref({resource_type:'server',server_id:'abcdefghijklmno'}),/^#\/telemetry\?server=abcdefghijklmno/)
@@ -8,6 +8,13 @@ test('links inventory targets without inventing external destinations',()=>{
  assert.match(link,/search=worker\+%26\+queue/)
  assert.match(link,/status=all/)
  assert.equal(incidentTargetHref({resource_type:'external',resource_id:'https://example.com'}),null)
+})
+test('only exposes Google Cloud incident links for GCP incidents',()=>{
+ const url='https://console.cloud.google.com/monitoring/alerting/alerts/0.example?project=lead-2024'
+ assert.equal(incidentSourceUrl({origin:'gcp',evidence:{url}}),url)
+ for(const value of ['javascript:alert(1)','https://console.cloud.google.com.evil.example/','https://user@console.cloud.google.com/','http://console.cloud.google.com/','not a url']) assert.equal(incidentSourceUrl({origin:'gcp',evidence:{url:value}}),null)
+ assert.equal(incidentSourceUrl({origin:'api',evidence:{url}}),null)
+ assert.equal(incidentSourceUrl({origin:'gcp'}),null)
 })
 test('formats the observation with units, zero and unavailable values',()=>{
  const t=x=>x

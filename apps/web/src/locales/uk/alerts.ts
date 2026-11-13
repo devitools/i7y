@@ -1,5 +1,6 @@
 export default {
   "incidents.viewAlert": "Переглянути сповіщення",
+  "incidents.viewInGcp": "Переглянути в Google Cloud",
   "incidents.sourceAlertError": "Не вдалося завантажити початкове сповіщення.",
   "incidents.startupSummary": "Відкриті інциденти: {count}",
   "incidents.startupHelp": "Відкрийте список інцидентів, щоб переглянути незавершені.",

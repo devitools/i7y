@@ -4,7 +4,7 @@ import { useQuasar } from 'quasar'
 import { activeOrganization, authStore } from '../api'
 import { alertsApi, incidentPhase, severityColor, alertTimestamp, alertLoadError } from '../alerts-api'
 import { t, locale } from '../i18n'
-import { incidentTargetHref, incidentMetric } from '../incident-presentation'
+import { incidentTargetHref, incidentMetric, incidentSourceUrl } from '../incident-presentation'
 import PageHeader from './PageHeader.vue'
 import PageActions from './PageActions.vue'
 const props = defineProps<{route:any, canEdit:boolean}>()
@@ -133,7 +133,7 @@ onUnmounted(() => {generation++;contextGeneration++;clearInterval(timer)})
       <q-banner v-if="disabledRule && incident.status==='open'" class="incident-notice q-mb-md">{{t('incidents.ruleDisabled')}}</q-banner>
       <q-card flat bordered class="monitoring-panel incident-summary">
         <div class="incident-summary-heading">
-          <div class="incident-summary-context"><div class="incident-badges"><q-badge outline :color="severityColor(incident.severity)">{{t('alerts.severity.'+incident.severity)}}</q-badge><q-badge outline :color="phaseTone(incident)">{{t('incidents.phase.'+phase)}}</q-badge></div><a v-if="incidentTargetHref(incident)" class="incident-resource incident-target" :href="incidentTargetHref(incident)">{{resourceLabel(incident)}}</a><strong v-else class="incident-resource">{{resourceLabel(incident)}}</strong><span class="monitoring-secondary">{{t('incidents.origin.'+incident.origin)}}</span></div>
+          <div class="incident-summary-context"><div class="incident-badges"><q-badge outline :color="severityColor(incident.severity)">{{t('alerts.severity.'+incident.severity)}}</q-badge><q-badge outline :color="phaseTone(incident)">{{t('incidents.phase.'+phase)}}</q-badge></div><a v-if="incidentTargetHref(incident)" class="incident-resource incident-target" :href="incidentTargetHref(incident)">{{resourceLabel(incident)}}</a><strong v-else class="incident-resource">{{resourceLabel(incident)}}</strong><span class="monitoring-secondary">{{t('incidents.origin.'+incident.origin)}}</span><a v-if="incidentSourceUrl(incident)" :href="incidentSourceUrl(incident)!" target="_blank" rel="noopener noreferrer" class="text-primary">{{t('incidents.viewInGcp')}} <q-icon name="open_in_new" size="16px"/></a></div>
           <PageActions :actions="detailActions" />
         </div>
         <dl class="incident-facts">
