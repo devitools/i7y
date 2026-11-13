@@ -1,0 +1,353 @@
+---
+- name: Prepare an independent WordPress project copy
+  hosts: i7y_targets
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  vars:
+    i7y_phase: preview
+    i7y_python: /usr/bin/python3
+    i7y_compose: docker-compose
+    i7y_helper: '{{ playbook_dir }}/../files/project_copy.py'
+    i7y_tools: '{{ playbook_dir }}/../../recipes/files'
+  tasks:
+    - name: Check project copy runtime before staging files
+      raw: |
+        for candidate in {{ i7y_python | quote }} /usr/local/bin/python3 /opt/i7y/python/bin/python3; do
+          if "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, {{ 9 if ansible_version.full is version("2.20", ">=") else 6 }}) else 1)' >/dev/null 2>&1; then
+            printf '%s\n' "$candidate"
+            exit 0
+          fi
+        done
+        printf 'I7Y_PYTHON_REQUIRED\n' >&2
+        exit 1
+      register: i7y_runtime
+      changed_when: false
+    - name: Select the verified project copy interpreter
+      set_fact:
+        i7y_python: '{{ i7y_runtime.stdout | trim }}'
+        ansible_python_interpreter: '{{ i7y_runtime.stdout | trim }}'
+    - name: Require one explicit target and a supported phase
+      ansible.builtin.assert:
+        that:
+          - groups['i7y_targets'] | length == 1
+          - i7y_phase in ['preview', 'execute']
+          - i7y_request is mapping
+          - i7y_result_path is defined
+    - name: Allocate private request storage
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: i7y-copy-request-
+      register: i7y_temporary
+    - name: Run the requested copy phase
+      block:
+        - name: Stage the fixed copy helper
+          ansible.builtin.copy:
+            src: '{{ i7y_helper }}'
+            dest: '{{ i7y_temporary.path }}/project_copy.py'
+            mode: '0600'
+        - name: Stage validated parameters
+          ansible.builtin.copy:
+            content: '{{ ((i7y_request | combine({"attempt_id": i7y_attempt_id})) if i7y_phase == "execute" else i7y_request) | to_json }}'
+            dest: '{{ i7y_temporary.path }}/request.json'
+            mode: '0600'
+          no_log: true
+        - name: Inspect source files and Docker identities
+          ansible.builtin.command:
+            argv:
+              - '{{ i7y_python }}'
+              - '{{ i7y_temporary.path }}/project_copy.py'
+              - preview
+              - '{{ i7y_temporary.path }}/request.json'
+          changed_when: false
+          register: i7y_preview
+          when: i7y_phase == 'preview'
+        - name: Return the preview
+          ansible.builtin.copy:
+            content: '{{ i7y_preview.stdout }}'
+            dest: '{{ i7y_result_path }}'
+            mode: '0600'
+          delegate_to: localhost
+          when: i7y_phase == 'preview'
+        - name: Execute the approved copy
+          when: i7y_phase == 'execute'
+          block:
+            - name: Recheck the preview and reserve the operation
+              ansible.builtin.command:
+                argv: ['{{ i7y_python }}', '{{ i7y_temporary.path }}/project_copy.py', reserve, '{{ i7y_temporary.path }}/request.json']
+              register: i7y_reserved
+            - name: Read the reserved source identities
+              set_fact:
+                i7y_copy: '{{ i7y_reserved.stdout | from_json }}'
+            - name: Run unfinished project copy steps
+              when: not (i7y_copy.completed | default(false))
+              block:
+                - name: Read source Compose configuration
+                  ansible.builtin.slurp:
+                    src: '{{ i7y_copy.source_root }}/app/docker-compose.yml'
+                  register: i7y_source_compose
+                  no_log: true
+                - name: Preserve the parsed source Compose configuration
+                  ansible.builtin.copy:
+                    content: '{{ i7y_source_compose.content | b64decode | from_yaml | to_json }}'
+                    dest: '{{ i7y_copy.state_path }}/source-compose.json'
+                    mode: '0600'
+                  no_log: true
+                - name: Read completed operation steps
+                  ansible.builtin.stat:
+                    path: '{{ i7y_copy.state_path }}/{{ item }}'
+                  loop: [database.sql, configured, restored, finalized, activated.json]
+                  register: i7y_steps
+                - name: Create a private tools directory
+                  ansible.builtin.file:
+                    path: '{{ i7y_copy.state_path }}/tools'
+                    state: directory
+                    mode: '0700'
+                - name: Stage the reviewed database and WordPress tools
+                  ansible.builtin.copy:
+                    src: '{{ i7y_tools }}/{{ item }}'
+                    dest: '{{ i7y_copy.state_path }}/tools/{{ item }}'
+                    mode: '0600'
+                  loop:
+                    - mysql-backup.sh
+                    - mysql-restore.sh
+                    - wordpress-common.sh
+                    - wordpress-config-check.php
+                    - wordpress-domain-contract.php
+                    - wordpress-domain-replace.php
+                    - wordpress-database-check.php
+                    - wordpress-configure.sh
+                    - wordpress-finalize.sh
+                    - wordpress-publish.sh
+                    - wordpress-review.sh
+                    - wordpress-clone-guard.php
+                - name: Fetch the checksum-pinned WP-CLI artifact
+                  ansible.builtin.get_url:
+                    url: https://github.com/wp-cli/wp-cli/releases/download/v2.12.0/wp-cli-2.12.0.phar
+                    dest: '{{ i7y_copy.state_path }}/tools/wp-cli.phar'
+                    checksum: sha256:ce34ddd838f7351d6759068d09793f26755463b4a4610a5a5c0a97b68220d85c
+                    mode: '0600'
+                - name: Back up the source database without stopping it
+                  ansible.builtin.command:
+                    argv: ['{{ i7y_python }}', '{{ i7y_temporary.path }}/project_copy.py', backup, '{{ i7y_temporary.path }}/request.json']
+                  when: not i7y_steps.results[0].stat.exists
+                  no_log: true
+                - name: Copy files and generate independent private configuration
+                  ansible.builtin.command:
+                    argv: ['{{ i7y_python }}', '{{ i7y_temporary.path }}/project_copy.py', prepare, '{{ i7y_temporary.path }}/request.json']
+                  register: i7y_prepared
+                - name: Read prepared copy paths
+                  set_fact:
+                    i7y_preparation: '{{ i7y_prepared.stdout | from_json }}'
+                - name: Verify and activate the isolated copy
+                  when: not i7y_steps.results[4].stat.exists
+                  block:
+                    - name: Read prepared destination Compose configuration
+                      ansible.builtin.slurp:
+                        src: '{{ i7y_copy.state_path }}/compose.json'
+                      register: i7y_prepared_compose
+                      no_log: true
+                    - name: Write the isolated review Compose configuration
+                      ansible.builtin.copy:
+                        content: '{{ i7y_prepared_compose.content | b64decode }}'
+                        dest: '{{ i7y_preparation.compose_path }}'
+                        mode: '0600'
+                      no_log: true
+                    - name: Create the review network without starting the database
+                      ansible.builtin.command:
+                        argv: ['{{ i7y_compose }}', '-f', '{{ i7y_preparation.compose_path }}', create, '{{ i7y_preparation.database_service }}']
+                      args:
+                        chdir: '{{ i7y_preparation.compose_path | dirname }}'
+                      no_log: true
+                    - name: Verify the review network before starting containers
+                      ansible.builtin.command:
+                        argv: ['{{ i7y_python }}', '{{ i7y_temporary.path }}/project_copy.py', verify_network_prestart, '{{ i7y_temporary.path }}/request.json']
+                      changed_when: false
+                    - name: Create only the destination database
+                      ansible.builtin.command:
+                        argv: ['{{ i7y_compose }}', '-f', '{{ i7y_preparation.compose_path }}', up, '-d', '{{ i7y_preparation.database_service }}']
+                      args:
+                        chdir: '{{ i7y_preparation.compose_path | dirname }}'
+                      no_log: true
+                    - name: Verify the isolated network before WordPress starts
+                      ansible.builtin.command:
+                        argv: ['{{ i7y_python }}', '{{ i7y_temporary.path }}/project_copy.py', verify_isolation, '{{ i7y_temporary.path }}/request.json']
+                      changed_when: false
+                    - name: Wait for the new database
+                      ansible.builtin.command:
+                        argv:
+                          - docker
+                          - exec
+                          - '{{ i7y_copy.database_name }}'
+                          - /bin/sh
+                          - '-c'
+                          - 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --no-defaults --protocol=tcp --host=127.0.0.1 --user=root --execute="SELECT 1"'
+                      register: i7y_database_ready
+                      until: i7y_database_ready.rc == 0
+                      retries: 30
+                      delay: 2
+                      changed_when: false
+                      no_log: true
+                    - name: Configure copied WordPress files with independent credentials
+                      ansible.builtin.command:
+                        argv: ['{{ i7y_compose }}', '-f', '{{ i7y_preparation.compose_path }}', run, '--rm', '--no-deps', '--entrypoint', /bin/sh, '{{ i7y_preparation.web_service }}', /opt/i7y/tools/wordpress-configure.sh, '{{ i7y_copy.wordpress_root }}', '{{ i7y_preparation.database_service }}']
+                      args:
+                        chdir: '{{ i7y_preparation.compose_path | dirname }}'
+                      when: not i7y_steps.results[1].stat.exists
+                      no_log: true
+                    - name: Record configured step
+                      ansible.builtin.file:
+                        path: '{{ i7y_copy.state_path }}/configured'
+                        state: touch
+                        mode: '0600'
+                    - name: Keep WordPress cron disabled during review
+                      ansible.builtin.command:
+                        argv: ['{{ i7y_compose }}', '-f', '{{ i7y_preparation.compose_path }}', run, '--rm', '--no-deps', '--entrypoint', /bin/sh, '{{ i7y_preparation.web_service }}', /opt/i7y/tools/wordpress-review.sh, '{{ i7y_copy.wordpress_root }}']
+                      args:
+                        chdir: '{{ i7y_preparation.compose_path | dirname }}'
+                      no_log: true
+                    - name: Verify backup integrity immediately before restoration
+                      ansible.builtin.stat:
+                        path: '{{ i7y_copy.state_path }}/database.sql'
+                        checksum_algorithm: sha256
+                      register: i7y_backup_integrity
+                    - name: Require the reviewed backup checksum
+                      ansible.builtin.assert:
+                        that:
+                          - i7y_backup_integrity.stat.checksum == i7y_preparation.backup_sha256
+                    - name: Restore the logical backup into the empty destination database
+                      shell: |
+                        set -eu
+                        docker cp '{{ i7y_copy.state_path }}/tools/mysql-restore.sh' '{{ i7y_copy.database_name }}:/tmp/i7y-restore.sh'
+                        docker exec -i -e I7Y_RESTORE_RETRY=yes '{{ i7y_copy.database_name }}' /bin/sh /tmp/i7y-restore.sh < '{{ i7y_copy.state_path }}/database.sql'
+                      args:
+                        executable: /bin/sh
+                      when: not i7y_steps.results[2].stat.exists
+                      no_log: true
+                    - name: Record restored step
+                      ansible.builtin.file:
+                        path: '{{ i7y_copy.state_path }}/restored'
+                        state: touch
+                        mode: '0600'
+                    - name: Update the copied site domain while preserving plugins and theme
+                      ansible.builtin.command:
+                        argv: ['{{ i7y_compose }}', '-f', '{{ i7y_preparation.compose_path }}', run, '--rm', '--no-deps', '--entrypoint', /bin/sh, '{{ i7y_preparation.web_service }}', /opt/i7y/tools/wordpress-finalize.sh, '{{ i7y_copy.wordpress_root }}', '{{ i7y_copy.source_domain }}', '{{ i7y_copy.destination_domain }}', '{{ i7y_preparation.database_service }}']
+                      args:
+                        chdir: '{{ i7y_preparation.compose_path | dirname }}'
+                      when: not i7y_steps.results[3].stat.exists
+                      no_log: true
+                    - name: Record finalized step
+                      ansible.builtin.file:
+                        path: '{{ i7y_copy.state_path }}/finalized'
+                        state: touch
+                        mode: '0600'
+                    - name: Start the destination web service
+                      ansible.builtin.command:
+                        argv: ['{{ i7y_compose }}', '-f', '{{ i7y_preparation.compose_path }}', up, '-d', '{{ i7y_preparation.web_service }}']
+                      args:
+                        chdir: '{{ i7y_preparation.compose_path | dirname }}'
+                      no_log: true
+                    - name: Confirm both destination containers are running
+                      ansible.builtin.command:
+                        argv: [docker, inspect, '--format', '{{ "{{.State.Running}}" }}', '{{ item }}']
+                      loop: ['{{ i7y_copy.database_name }}', '{{ i7y_copy.web_name }}']
+                      register: i7y_container_health
+                      until: i7y_container_health.stdout == 'true'
+                      retries: 10
+                      delay: 2
+                      changed_when: false
+                    - name: Verify the copied site HTTP response
+                      ansible.builtin.command:
+                        argv: ['{{ i7y_python }}', '{{ i7y_temporary.path }}/project_copy.py', verify, '{{ i7y_temporary.path }}/request.json']
+                      register: i7y_site_health
+                      until: i7y_site_health.rc == 0
+                      retries: 10
+                      delay: 3
+                      changed_when: false
+                    - name: Stop the isolated web service before publication
+                      ansible.builtin.command:
+                        argv: ['{{ i7y_compose }}', '-f', '{{ i7y_preparation.compose_path }}', stop, '{{ i7y_preparation.web_service }}']
+                      args:
+                        chdir: '{{ i7y_preparation.compose_path | dirname }}'
+                      no_log: true
+                    - name: Restore the original WordPress cron setting
+                      ansible.builtin.command:
+                        argv: ['{{ i7y_compose }}', '-f', '{{ i7y_preparation.compose_path }}', run, '--rm', '--no-deps', '--entrypoint', /bin/sh, '{{ i7y_preparation.web_service }}', /opt/i7y/tools/wordpress-publish.sh, '{{ i7y_copy.wordpress_root }}']
+                      args:
+                        chdir: '{{ i7y_preparation.compose_path | dirname }}'
+                      no_log: true
+                    - name: Remove transient operation mounts from the destination configuration
+                      ansible.builtin.command:
+                        argv: ['{{ i7y_python }}', '{{ i7y_temporary.path }}/project_copy.py', activate, '{{ i7y_temporary.path }}/request.json']
+                - name: Read the final destination Compose configuration
+                  ansible.builtin.slurp:
+                    src: '{{ i7y_copy.state_path }}/compose.json'
+                  register: i7y_final_compose
+                  no_log: true
+                - name: Write readable destination Compose with environment references
+                  ansible.builtin.copy:
+                    content: '{{ i7y_source_compose.content | b64decode | i7y_preserve_compose(i7y_final_compose.content | b64decode | from_json, i7y_copy.source_domain, i7y_copy.destination_domain) }}'
+                    dest: '{{ i7y_preparation.compose_path }}'
+                    mode: '0600'
+                  no_log: true
+                - name: Publish the verified destination services
+                  ansible.builtin.command:
+                    argv: ['{{ i7y_compose }}', '-f', '{{ i7y_preparation.compose_path }}', up, '-d', '{{ i7y_preparation.database_service }}', '{{ i7y_preparation.web_service }}']
+                  args:
+                    chdir: '{{ i7y_preparation.compose_path | dirname }}'
+                  no_log: true
+                - name: Confirm published containers are running
+                  ansible.builtin.command:
+                    argv: [docker, inspect, '--format', '{{ "{{.State.Running}}" }}', '{{ item }}']
+                  loop: ['{{ i7y_copy.database_name }}', '{{ i7y_copy.web_name }}']
+                  register: i7y_published_health
+                  until: i7y_published_health.stdout == 'true'
+                  retries: 10
+                  delay: 2
+                  changed_when: false
+                - name: Remove the unused isolated network
+                  ansible.builtin.command:
+                    argv: ['{{ i7y_python }}', '{{ i7y_temporary.path }}/project_copy.py', cleanup_isolation, '{{ i7y_temporary.path }}/request.json']
+                - name: Complete the project copy and release its lock
+                  ansible.builtin.command:
+                    argv: ['{{ i7y_python }}', '{{ i7y_temporary.path }}/project_copy.py', finish, '{{ i7y_temporary.path }}/request.json']
+                  register: i7y_completed
+            - name: Return the completed project copy
+              ansible.builtin.copy:
+                content: '{{ i7y_reserved.stdout if (i7y_copy.completed | default(false)) else i7y_completed.stdout }}'
+                dest: '{{ i7y_result_path }}'
+                mode: '0600'
+              delegate_to: localhost
+      rescue:
+        - name: Release the completed download attempt
+          ansible.builtin.command:
+            argv: ['{{ i7y_python }}', '{{ i7y_temporary.path }}/project_copy.py', release_download_attempt, '{{ i7y_temporary.path }}/request.json']
+          when:
+            - i7y_phase == 'execute'
+            - (ansible_failed_task.name | default('')) in ['Fetch the checksum-pinned WP-CLI artifact', 'Read source Compose configuration', 'Preserve the parsed source Compose configuration', 'Read completed operation steps', 'Create a private tools directory', 'Stage the reviewed database and WordPress tools', 'Copy files and generate independent private configuration']
+            - not (ansible_failed_result.unreachable | default(false))
+        - name: Release the confirmed stopped backup attempt
+          ansible.builtin.command:
+            argv: ['{{ i7y_python }}', '{{ i7y_temporary.path }}/project_copy.py', release_backup_attempt, '{{ i7y_temporary.path }}/request.json']
+          when:
+            - i7y_phase == 'execute'
+            - (ansible_failed_task.name | default('')) == 'Back up the source database without stopping it'
+            - (ansible_failed_result.rc | default(0) | int) in [124, 137]
+            - not (ansible_failed_result.unreachable | default(false))
+        - name: Release the completed health-check attempt
+          ansible.builtin.command:
+            argv: ['{{ i7y_python }}', '{{ i7y_temporary.path }}/project_copy.py', release_health_attempt, '{{ i7y_temporary.path }}/request.json']
+          when:
+            - i7y_phase == 'execute'
+            - (ansible_failed_task.name | default('')) == 'Verify the copied site HTTP response'
+            - ansible_failed_result.rc is defined
+            - "'The copied site did not return a successful HTTP response' in (ansible_failed_result.stdout | default(''))"
+            - not (ansible_failed_result.unreachable | default(false))
+        - name: Report safe copy failure
+          ansible.builtin.fail:
+            msg: '{{ (ansible_failed_result | default({})) | i7y_safe_failure((ansible_failed_task | default({})).name | default("Copy operation")) }}'
+      always:
+        - name: Remove transient request files
+          ansible.builtin.file:
+            path: '{{ i7y_temporary.path }}'
+            state: absent

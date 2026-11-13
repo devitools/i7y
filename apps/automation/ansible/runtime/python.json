@@ -1,0 +1,7 @@
+{
+  "version": "3.12.16",
+  "release": "20261026",
+  "platform": "x86_64-unknown-linux-gnu",
+  "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.12.16%2B20261026-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+  "sha256": "ce4f6d0a6cfdb3bed6e44c2f9affd85943c76a42e25ad3a259002f31d6fb8a20"
+}

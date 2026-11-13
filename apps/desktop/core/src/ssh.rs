@@ -373,6 +373,10 @@ pub(crate) fn run(
 }
 
 fn run_command(profile: &ControllerProfile, identity: &Path, known_hosts: &Path, remote: Option<&str>, input: Option<Vec<u8>>) -> Result<(bool, String, String), SshError> {
+    run_command_with_timeout(profile, identity, known_hosts, remote, input, Duration::from_secs(30))
+}
+
+fn run_command_with_timeout(profile: &ControllerProfile, identity: &Path, known_hosts: &Path, remote: Option<&str>, input: Option<Vec<u8>>, timeout: Duration) -> Result<(bool, String, String), SshError> {
     let mut args = ssh_arguments(profile, identity, known_hosts)?;
     if let Some(remote) = remote {
         args.pop();
@@ -411,7 +415,7 @@ fn run_command(profile: &ControllerProfile, identity: &Path, known_hosts: &Path,
         if let Some(status) = child.try_wait().map_err(|_| SshError::ConnectionFailed)? {
             break status;
         }
-        if start.elapsed() > Duration::from_secs(30) {
+        if start.elapsed() > timeout {
             let _ = child.kill();
             let _ = child.wait();
             let _ = out.join();
@@ -662,4 +666,12 @@ mod ping_tests {
         }
         assert_eq!(ansible_ping(&profile, Path::new("/tmp/known_hosts"), "192.0.2.1", 0), Err(SshError::InvalidProfile));
     }
+}
+
+pub fn run_ansible_release(profile: &ControllerProfile, known_hosts: &Path, payload: Vec<u8>) -> Result<serde_json::Value, SshError> {
+    let bootstrap = include_str!("../../../automation/ansible/files/run_release.py");
+    let remote = format!("python3 -c '{}'", bootstrap.replace('\'', "'\"'\"'"));
+    let (_, output, errors) = run_command_with_timeout(profile, Path::new(&profile.identity_file), known_hosts, Some(&remote), Some(payload), Duration::from_secs(14520))?;
+    if output.trim().is_empty() { return Err(classify_failure(&errors)); }
+    serde_json::from_str(&output).map_err(|_| SshError::InvalidDiagnostic)
 }

@@ -13,7 +13,7 @@ pub struct ControllerSettings {
     execution_enabled: bool,
 }
 
-fn directory(app: &tauri::AppHandle, state: &crate::backend::Backend) -> Result<PathBuf, SshError> {
+pub(crate) fn directory(app: &tauri::AppHandle, state: &crate::backend::Backend) -> Result<PathBuf, SshError> {
     let backend = state
         .url
         .lock()
@@ -29,7 +29,7 @@ fn directory(app: &tauri::AppHandle, state: &crate::backend::Backend) -> Result<
         .join(key))
 }
 
-fn private_write(path: &std::path::Path, bytes: &[u8]) -> Result<(), SshError> {
+pub(crate) fn private_write(path: &std::path::Path, bytes: &[u8]) -> Result<(), SshError> {
     use std::io::Write;
     let mut options = fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
@@ -46,7 +46,7 @@ fn private_write(path: &std::path::Path, bytes: &[u8]) -> Result<(), SshError> {
         .map_err(|_| SshError::LocalStorageFailed)
 }
 
-fn read_profile(path: &std::path::Path) -> Result<Option<ControllerProfile>, SshError> {
+pub(crate) fn read_profile(path: &std::path::Path) -> Result<Option<ControllerProfile>, SshError> {
     match fs::read(path) {
         Ok(bytes) => {
             let mut profile: ControllerProfile =
