@@ -11,6 +11,8 @@ import sys
 import tempfile
 import uuid
 
+PLAYBOOK_TIMEOUT_SECONDS = 14400
+
 
 def allowed_helper_errors(source):
     errors = set()
@@ -29,6 +31,9 @@ def allowed_helper_errors(source):
 def retryable_failure(detail, events, attempt, log):
     pending = ('A previous copy attempt requires reconciliation before retry', 'Another project copy requires completion or reconciliation')
     if isinstance(detail, dict) and detail.get('name') == 'Recheck the preview and reserve the operation' and any(reason in log for reason in pending) and 'UNREACHABLE!' not in log:
+        return True
+    download_released = any(event.get('attempt') == attempt and event.get('name') == 'Release the completed download attempt' and event.get('state') == 'completed' for event in events)
+    if download_released and isinstance(detail, dict) and detail.get('name') == 'Fetch the checksum-pinned WP-CLI artifact' and 'UNREACHABLE!' not in log:
         return True
     backup_released = any(event.get('attempt') == attempt and event.get('name') == 'Release the confirmed stopped backup attempt' and event.get('state') == 'completed' for event in events)
     if backup_released and isinstance(detail, dict) and detail.get('name') == 'Back up the source database without stopping it' and detail.get('rc') in (124, 137) and 'UNREACHABLE!' not in log:
@@ -100,9 +105,9 @@ def main():
     if not 1 <= port <= 65535 or payload['phase'] not in ('preview', 'execute'):
         raise ValueError('Invalid action parameters')
     runtime = subprocess.check_output(['/usr/bin/ansible-playbook', '--version'], env={'PATH': '/usr/bin:/bin', 'HOME': str(Path.home()), 'LC_ALL': 'C'}, timeout=15).decode().splitlines()[0]
-    if payload['phase'] == 'execute' and payload.get('expected_runtime') != runtime:
-        print(json.dumps({'error': 'The automation runtime changed. Review the copy again.', 'error_code': 'runtime_changed_before_execution'}))
-        return 1
+    operation = payload['request']['operation_id']
+    if not re.fullmatch(r'[a-f0-9]{32}', operation):
+        raise ValueError('Invalid operation identifier')
     files = payload['files']
     if len(files) > 32 or sum(len(v) for v in files.values()) > 262144:
         raise ValueError('Invalid release size')
@@ -153,14 +158,29 @@ def main():
             except BlockingIOError:
                 print(json.dumps({'error': 'This copy is already running. Wait for it to finish.', 'retryable': True}))
                 return 1
+            started = root / ('operation-' + operation + '-started.json')
+            if payload['phase'] == 'execute' and payload.get('expected_runtime') != runtime:
+                print(json.dumps({'error': 'The automation runtime changed. Review the copy again.' if not started.exists() else 'The automation runtime changed. Restore the reviewed runtime before resuming this copy.',
+                                  'error_code': 'runtime_changed_before_execution', 'execution_started': started.exists()}))
+                return 1
+            if payload['phase'] == 'execute' and not started.exists():
+                descriptor = os.open(str(started), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(descriptor, 'w') as receipt:
+                    json.dump({'attempt': attempt_id}, receipt)
+                    receipt.flush()
+                    os.fsync(receipt.fileno())
             with logfile.with_suffix('.events.jsonl').open('a') as events:
                 events.write(json.dumps({'attempt': env['I7Y_ATTEMPT_ID'], 'state': 'started'}) + '\n')
             with logfile.open('ab') as log:
                 log.write(b'\nI7Y_ATTEMPT\n')
                 log.flush()
-                outcome = subprocess.run(['/usr/bin/ansible-playbook', '-i', str(request / 'inventory.json'),
-                    str(release / 'ansible/playbooks/project-copy.yml'), '-e', '@' + str(request / 'parameters.json')],
-                    stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=env, timeout=1100)
+                try:
+                    outcome = subprocess.run(['/usr/bin/ansible-playbook', '-i', str(request / 'inventory.json'),
+                        str(release / 'ansible/playbooks/project-copy.yml'), '-e', '@' + str(request / 'parameters.json')],
+                        stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=env, timeout=PLAYBOOK_TIMEOUT_SECONDS)
+                except subprocess.TimeoutExpired:
+                    print(json.dumps({'error': 'Automation request timed out. Inspect operation state before retrying.', 'retryable': False, 'execution_started': payload['phase'] == 'execute', 'operation_id': operation}))
+                    return 1
             if outcome.returncode != 0 or not result_path.is_file():
                 attempt_log = logfile.read_text(errors='replace').rsplit('I7Y_ATTEMPT\n', 1)[-1]
                 if '\nPLAY [' in attempt_log:
@@ -196,11 +216,12 @@ def main():
                 if isinstance(error_detail, dict) and error_detail.get('name') == 'Recheck the preview and reserve the operation' and pending in attempt_log:
                     message = pending
                     error_detail['error'] = pending
-                print(json.dumps({'error': message, 'error_detail': error_detail, 'retryable': retryable_failure(error_detail, attempt_events, attempt_id, attempt_log), 'operation_id': payload['request']['operation_id']}))
+                print(json.dumps({'error': message, 'error_detail': error_detail, 'retryable': retryable_failure(error_detail, attempt_events, attempt_id, attempt_log), 'operation_id': payload['request']['operation_id'], 'execution_started': payload['phase'] == 'execute'}))
                 return 1
             value = json.loads(result_path.read_text())
             value['release'] = release_id
             value['runtime'] = runtime
+            value['execution_started'] = payload['phase'] == 'execute'
             print(json.dumps(value))
     return 0
 

@@ -191,7 +191,26 @@ fn release_id(files: &BTreeMap<&str, &str>) -> String {
 }
 
 fn should_refresh_preview(was_started: bool, result: &Value) -> bool {
-    !was_started && result["error_code"] == "runtime_changed_before_execution"
+    !was_started && result["execution_started"] == false && result["error_code"] == "runtime_changed_before_execution"
+}
+
+fn record_execution_result(path: &Path, was_started: bool, result: &mut Value) -> Result<(), SshError> {
+    let confirmed = result["execution_started"] == true;
+    let refresh = should_refresh_preview(was_started, result);
+    if confirmed {
+        private_write(&path.join("execution-started"), b"remote")?;
+    }
+    if confirmed || refresh {
+        match fs::remove_file(path.join("execution-pending")) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(SshError::LocalStorageFailed),
+        }
+    }
+    if refresh {
+        result["refresh_preview"] = json!(true);
+    }
+    Ok(())
 }
 
 fn release_change(was_started: bool) -> Value {
@@ -220,7 +239,8 @@ pub async fn project_copy_preview(
     for entry in fs::read_dir(&path).map_err(|_| SshError::LocalStorageFailed)? {
         let entry = entry.map_err(|_| SshError::LocalStorageFailed)?;
         let candidate = entry.path();
-        if !entry.file_name().to_string_lossy().starts_with("copy-") || !candidate.join("execution-started").is_file() {
+        if !entry.file_name().to_string_lossy().starts_with("copy-")
+            || !(candidate.join("execution-started").is_file() || candidate.join("execution-pending").is_file()) {
             continue;
         }
         let completed = fs::read(candidate.join("result.json")).ok()
@@ -309,31 +329,28 @@ pub async fn project_copy_execute(
         return Err(SshError::InvalidProfile);
     }
     let was_started = temporary.join("execution-started").exists();
+    let was_pending = temporary.join("execution-pending").exists();
     if review["preview"]["release"] != release_id(&release_files()) {
-        return Ok(release_change(was_started));
+        return Ok(release_change(was_started || was_pending));
     }
-    if !was_started && review["preview"]["expires_at"].as_u64().unwrap_or(0) < now {
+    if !was_started && !was_pending && review["preview"]["expires_at"].as_u64().unwrap_or(0) < now {
         return Ok(json!({"error": "The preview expired. Review the copy again.", "refresh_preview": true}));
     }
     let worker_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         check_copy_context(&worker_app, &context, lock_epoch)?;
-        private_write(&temporary.join("execution-started"), b"started")?;
+        private_write(&temporary.join("execution-pending"), b"pending")?;
         let _ = worker_app.emit("project-copy-started", json!({"operation_id": operation_id, "phase": "execute"}));
         let mut request = review["request"].clone();
         request["fingerprint"] = review["preview"]["fingerprint"].clone();
         let payload = json!({"address": target.address, "port": target.port, "phase": "execute", "request": request, "expected_runtime": review["preview"]["runtime"], "files": release_files()});
         if let Err(error) = check_copy_context(&worker_app, &context, lock_epoch) {
-            if !was_started { let _ = fs::remove_file(temporary.join("execution-started")); }
+            if !was_pending { let _ = fs::remove_file(temporary.join("execution-pending")); }
             return Err(error);
         }
         let outcome = ssh::run_ansible_release(&profile, &temporary.join("known_hosts"), serde_json::to_vec(&payload).map_err(|_| SshError::InvalidProfile)?);
-        let _ = fs::remove_file(temporary.join("execution-running"));
         let mut result = outcome?;
-        if should_refresh_preview(was_started, &result) {
-            fs::remove_file(temporary.join("execution-started")).map_err(|_| SshError::LocalStorageFailed)?;
-            result["refresh_preview"] = json!(true);
-        }
+        record_execution_result(&temporary, was_started, &mut result)?;
         private_write(&temporary.join("result.json"), &serde_json::to_vec(&result).map_err(|_| SshError::LocalStorageFailed)?)?;
         Ok(result)
     }).await.map_err(|_| SshError::ConnectionFailed)?
@@ -358,11 +375,35 @@ mod tests {
     }
     #[test]
     fn refresh_only_when_runtime_rejection_precedes_first_execution() {
-        let rejected = json!({"error_code": "runtime_changed_before_execution"});
+        let rejected = json!({"error_code": "runtime_changed_before_execution", "execution_started": false});
         assert!(should_refresh_preview(false, &rejected));
         assert!(!should_refresh_preview(true, &rejected));
         assert!(!should_refresh_preview(false, &json!({"error": "interrupted"})));
         assert!(!should_refresh_preview(false, &json!({})));
+        assert!(!should_refresh_preview(false, &json!({"error_code": "runtime_changed_before_execution", "execution_started": true})));
+        assert!(!should_refresh_preview(false, &json!({"error_code": "runtime_changed_before_execution"})));
+    }
+    #[test]
+    fn execution_receipts_distinguish_unknown_rejected_and_started_requests() {
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let path = std::env::temp_dir().join(format!("i7y-copy-receipt-{}-{nonce}", std::process::id()));
+        fs::create_dir(&path).unwrap();
+        private_write(&path.join("execution-pending"), b"pending").unwrap();
+        record_execution_result(&path, false, &mut json!({"error": "interrupted"})).unwrap();
+        assert!(path.join("execution-pending").exists());
+        assert!(!path.join("execution-started").exists());
+        let mut rejected = json!({"error_code": "runtime_changed_before_execution", "execution_started": false});
+        record_execution_result(&path, false, &mut rejected).unwrap();
+        assert_eq!(rejected["refresh_preview"], true);
+        assert!(!path.join("execution-pending").exists());
+        assert!(!path.join("execution-started").exists());
+        private_write(&path.join("execution-pending"), b"pending").unwrap();
+        let mut started = json!({"execution_started": true});
+        record_execution_result(&path, false, &mut started).unwrap();
+        record_execution_result(&path, true, &mut started).unwrap();
+        assert!(path.join("execution-started").exists());
+        assert!(!path.join("execution-pending").exists());
+        fs::remove_dir_all(path).unwrap();
     }
     #[test]
     fn release_change_only_allows_refresh_before_execution() {

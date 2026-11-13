@@ -1,10 +1,13 @@
 import os
+import importlib.util
+import json
 from pathlib import Path
 import subprocess
 import time
 import tempfile
 import unittest
 import uuid
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "apps/automation/recipes/files/mysql-backup.sh"
@@ -62,6 +65,24 @@ class MysqlBackup(unittest.TestCase):
             self.assertEqual(self.sql("SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE USER LIKE 'i7y\\_%'").stdout.strip(), b'0')
             self.assertEqual(self.sql("SELECT COUNT(*) FROM mysql.user WHERE User LIKE 'i7y\\_%'").stdout.strip(), b'0')
             self.sql('UPDATE timeout_fixture SET id=2 WHERE id=1')
+            spec = importlib.util.spec_from_file_location('project_copy', SCRIPT.parents[2] / 'ansible/files/project_copy.py')
+            helper = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(helper)
+            state = Path(directory) / 'state'
+            (state / 'tools').mkdir(parents=True)
+            (state / 'tools/mysql-backup.sh').write_text('PATH=/tmp/i7y-test-bin:$PATH\n' + SCRIPT.read_text())
+            request = {'attempt_id': 'a' * 32}
+            (state / 'attempt.active').write_text(json.dumps(request))
+            database_id = subprocess.check_output(['docker', 'inspect', '--format', '{{.Id}}', self.container]).decode().strip()
+            plan = {'source': {'database_id': database_id}}
+            subprocess.run(['docker', 'exec', '-d', self.container, 'sleep', '120'], check=True)
+            with patch.object(helper, 'load_plan', return_value=(state, plan)):
+                self.assertIn(helper.backup(request)['rc'], (124, 137))
+                active_execs = subprocess.check_output(['docker', 'inspect', '--format', '{{json .ExecIDs}}', self.container])
+                self.assertTrue(json.loads(active_execs))
+                self.assertTrue(helper.release_backup_attempt(request)['released'])
+            self.assertFalse((state / 'attempt.active').exists())
+            self.sql('UPDATE timeout_fixture SET id=3 WHERE id=2')
 
     def test_independent_restore_and_unsupported_schema_rejection(self):
         self.sql("CREATE TABLE wp_options (id INT PRIMARY KEY, value LONGBLOB) ENGINE=InnoDB;"

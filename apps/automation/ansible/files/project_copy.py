@@ -1,11 +1,15 @@
 import copy
+from contextlib import contextmanager
+import fcntl
 import hashlib
+import http.client
 import ipaddress
 import json
 import os
 import re
 import secrets
 import shutil
+import socket
 import stat
 import subprocess
 import sys
@@ -47,6 +51,31 @@ def command(args, timeout=60):
     return result.stdout.decode()
 
 
+@contextmanager
+def docker_response(method, path, payload=None, timeout=60):
+    endpoint = os.environ.get('DOCKER_HOST') or command(['docker', 'context', 'inspect', '--format', '{{.Endpoints.docker.Host}}']).strip()
+    require(endpoint.startswith('unix:///'), 'Project backup requires a local Docker socket')
+    connection = http.client.HTTPConnection('localhost', timeout=timeout)
+    try:
+        connection.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        connection.sock.settimeout(timeout)
+        connection.sock.connect(endpoint[len('unix://'):])
+        connection.request(method, '/v1.48' + path, body=json.dumps(payload) if payload is not None else None,
+                           headers={'Content-Type': 'application/json'})
+        response = connection.getresponse()
+        require(response.status in (200, 201), 'Unable to inspect the tracked backup exec')
+        yield response
+    except (OSError, http.client.HTTPException):
+        raise CopyError('Backup outcome requires reconciliation before retry')
+    finally:
+        connection.close()
+
+
+def docker_json(method, path, payload=None):
+    with docker_response(method, path, payload) as response:
+        return json.load(response)
+
+
 def private_json(path, value):
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, 'w') as stream:
@@ -61,6 +90,30 @@ def replace_json(path, value):
         temporary.unlink()
     private_json(temporary, value)
     os.replace(str(temporary), str(path))
+
+
+@contextmanager
+def exclusive_lock(path):
+    with path.open('a') as stream:
+        try:
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise CopyError('A previous copy attempt requires reconciliation before retry')
+        try:
+            yield
+        finally:
+            fcntl.flock(stream, fcntl.LOCK_UN)
+
+
+@contextmanager
+def owned_attempt(request):
+    state, plan = load_plan(request)
+    with exclusive_lock(state / 'attempt.lock'):
+        attempt = request.get('attempt_id', '')
+        require(re.fullmatch(r'[a-f0-9]{32}', attempt) is not None, 'Invalid copy attempt identifier')
+        active = state / 'attempt.active'
+        require(active.is_file() and json.loads(active.read_text()).get('attempt_id') == attempt, 'Copy attempt owner mismatch')
+        yield state, plan, active
 
 
 def manifest(root):
@@ -80,6 +133,15 @@ def manifest(root):
                 checksum = hasher.hexdigest()
             result.append([str(path.relative_to(root)), info.st_mode, info.st_uid, info.st_gid, info.st_size, info.st_mtime_ns, checksum])
     return sorted(result)
+
+
+def configuration_files(value, files):
+    document = Path(value['wordpress_root'])
+    roots = [Path(mount['relative']) / document.relative_to(mount['target']) for mount in value['mounts']
+             if document == Path(mount['target']) or Path(mount['target']) in document.parents]
+    return [entry[:5] + [entry[6]] for entry in files if entry[6] is not None and
+            (not any(root == Path(entry[0]) or root in Path(entry[0]).parents for root in roots)
+             or Path(entry[0]).name in ('wp-config.php', '.htaccess', '.user.ini', '.env', 'docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml'))]
 
 
 def source_root(value, source_domain):
@@ -231,21 +293,37 @@ def load_plan(request):
 
 def reserve(request):
     state, plan = load_plan(request)
-    if (state / 'completed.json').is_file():
-        require(not (state / 'attempt.active').exists(), 'A previous copy attempt requires reconciliation before retry')
-        return reserve_started(request, state, plan)
-    attempt = request.get('attempt_id', '')
-    require(re.fullmatch(r'[a-f0-9]{32}', attempt) is not None, 'Invalid copy attempt identifier')
+    with exclusive_lock(state / 'attempt.lock'), exclusive_lock(state.parent / 'copy.guard'):
+        if (state / 'completed.json').is_file():
+            return reserve_started(request, state, plan)
+        attempt = request.get('attempt_id', '')
+        require(re.fullmatch(r'[a-f0-9]{32}', attempt) is not None, 'Invalid copy attempt identifier')
+        active = state / 'attempt.active'
+        try:
+            private_json(active, {'attempt_id': attempt})
+        except FileExistsError:
+            raise CopyError('A previous copy attempt requires reconciliation before retry')
+        try:
+            return reserve_started(request, state, plan)
+        except Exception:
+            if json.loads(active.read_text()).get('attempt_id') == attempt:
+                active.unlink()
+            raise
+
+
+def cleanup_completed(request, state, completed):
     active = state / 'attempt.active'
-    try:
-        private_json(active, {'attempt_id': attempt})
-    except FileExistsError:
-        raise CopyError('A previous copy attempt requires reconciliation before retry')
-    try:
-        return reserve_started(request, state, plan)
-    except Exception:
+    if active.exists():
+        require(completed.get('attempt_id') and json.loads(active.read_text()).get('attempt_id') == completed['attempt_id'], 'A previous copy attempt requires reconciliation before retry')
         active.unlink()
-        raise
+    lock = state.parent / 'copy.lock'
+    if lock.exists():
+        owner = lock / 'owner.json'
+        if owner.is_file():
+            if json.loads(owner.read_text()).get('operation_id') != request['operation_id']:
+                return
+            owner.unlink()
+        lock.rmdir()
 
 
 def reserve_started(request, state, plan):
@@ -253,10 +331,7 @@ def reserve_started(request, state, plan):
         completed = json.loads((state / 'completed.json').read_text())
         verified = json.loads((state / 'verified.json').read_text())
         require(completed.get('review_required') is False and verified.get('source') == plan['source']['source_domain'] and verified.get('destination') == plan['source']['destination_domain'], 'Completed operation state is invalid')
-        lock = state.parent / 'copy.lock'
-        if lock.exists() and (lock / 'owner.json').is_file() and json.loads((lock / 'owner.json').read_text()).get('operation_id') == request['operation_id']:
-            (lock / 'owner.json').unlink()
-            lock.rmdir()
+        cleanup_completed(request, state, completed)
         return dict(public_plan(plan['source']), review_required=False, operation_id=request['operation_id'], completed=True)
     require((state / 'started.json').exists() or int(time.time()) <= plan['created_at'] + 600, 'Preview expired; inspect the project again')
     require({k: v for k, v in inspect(plan['request'], include_files=False).items() if k != 'files'} == {k: v for k, v in plan['source'].items() if k != 'files'}, 'Source container configuration changed')
@@ -346,6 +421,66 @@ def require_isolated_network(network, containers, expected_name):
     require(set((network.get('Containers') or {}).keys()) == expected_ids, 'The review network has unexpected containers')
 
 
+def backup(request):
+    with owned_attempt(request) as (state, plan, _):
+        require(not (state / 'backup.pending').exists(), 'Backup outcome requires reconciliation before retry')
+        require(not (state / 'database.sql').exists(), 'Database backup already exists')
+        private_json(state / 'backup.pending', {'attempt_id': request['attempt_id']})
+        database = plan['source']['database_id']
+        script = (state / 'tools/mysql-backup.sh').read_text()
+        created = docker_json('POST', '/containers/' + database + '/exec',
+                              {'AttachStdout': True, 'AttachStderr': True, 'Tty': False, 'Cmd': ['/bin/sh', '-c', script]})
+        exec_id = created.get('Id', '')
+        require(re.fullmatch(r'[a-f0-9]{64}', exec_id) is not None, 'Invalid backup exec identifier')
+        replace_json(state / 'backup-exec.json', {'attempt_id': request['attempt_id'], 'exec_id': exec_id, 'database_id': database})
+        partial = state / 'database.sql.partial'
+        with partial.open('wb') as output, (state / 'backup.stderr').open('wb') as errors:
+            with docker_response('POST', '/exec/' + exec_id + '/start', {'Detach': False, 'Tty': False}, timeout=3600) as response:
+                while True:
+                    header = response.read(8)
+                    if not header:
+                        break
+                    require(len(header) == 8 and header[0] in (1, 2) and header[1:4] == b'\0\0\0', 'Invalid backup exec stream')
+                    remaining = int.from_bytes(header[4:], 'big')
+                    stream = output if header[0] == 1 else errors
+                    while remaining:
+                        chunk = response.read(min(remaining, 1024 * 1024))
+                        require(chunk, 'Incomplete backup exec stream')
+                        stream.write(chunk)
+                        remaining -= len(chunk)
+            output.flush()
+            os.fsync(output.fileno())
+        stopped = stopped_backup(state, plan, request['attempt_id'])
+        status = stopped.get('ExitCode')
+        require(isinstance(status, int), 'Backup outcome requires reconciliation before retry')
+        if status != 0:
+            if 'I7Y_BACKUP_CLEAN' in (state / 'backup.stderr').read_text().splitlines():
+                (state / 'backup.pending').unlink()
+            return {'rc': status}
+        require(partial.stat().st_size > 0, 'The database backup is empty')
+        hasher = hashlib.sha256()
+        with partial.open('rb') as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                hasher.update(chunk)
+        receipt = state / 'database.sha256.partial'
+        receipt.write_text(hasher.hexdigest())
+        os.replace(str(partial), str(state / 'database.sql'))
+        os.replace(str(receipt), str(state / 'database.sha256'))
+        (state / 'backup.pending').unlink()
+        return {'rc': 0}
+
+
+def stopped_backup(state, plan, attempt):
+    receipt = json.loads((state / 'backup-exec.json').read_text())
+    require(receipt.get('attempt_id') == attempt and receipt.get('database_id') == plan['source']['database_id'], 'Backup exec owner mismatch')
+    exec_id = receipt.get('exec_id', '')
+    require(re.fullmatch(r'[a-f0-9]{64}', exec_id) is not None, 'Invalid backup exec identifier')
+    inspected = docker_json('GET', '/exec/' + exec_id + '/json')
+    require(inspected.get('ID') == exec_id and inspected.get('ContainerID') == plan['source']['database_id'], 'Backup exec owner mismatch')
+    require(inspected.get('Running') is False, 'The source database backup exec is still running')
+    return inspected
+
+
 def prepare(request):
     state, plan = load_plan(request)
     if (state / 'prepared.json').exists():
@@ -354,7 +489,7 @@ def prepare(request):
     value = plan['source']
     root = Path(value['source_root'])
     destination = Path(value['destination_root'])
-    require(manifest(root) == value['files'], 'Source files changed since preview')
+    require(configuration_files(value, manifest(root)) == configuration_files(value, value['files']), 'Source configuration files changed since preview')
     compose = json.loads((state / 'source-compose.json').read_text())
     volume_names = command(['docker', 'volume', 'ls', '--format', '{{.Name}}']).splitlines()
     internal_networks = [key for key, definition in compose.get('networks', {}).items() if not (definition or {}).get('external')]
@@ -369,6 +504,10 @@ def prepare(request):
         require(isinstance(definition, dict) and not definition.get('external') and not definition.get('driver_opts') and definition.get('driver', 'local') == 'local', 'Custom or external source volumes require a dedicated adapter')
         key = replace_domain(key, value['source_domain'], value['destination_domain'])
         require(value['volume_name'] + '-' + key not in volume_names, 'Destination Docker resource already exists')
+    services = compose.get('services', {})
+    require(set(services) == {value['database_service'], value['web_service']}, 'Compose must contain the two selected services')
+    database_volumes(services[value['database_service']], compose.get('volumes', {}))
+    isolated_compose(compose, value['database_service'], value['web_service'], 'validation', '10.240.0.0/28')
     require({k: v for k, v in inspect(plan['request'], include_files=False).items() if k != 'files'} == {k: v for k, v in value.items() if k != 'files'}, 'Source container configuration changed')
     require(not (state / 'backup.pending').exists(), 'Backup outcome requires reconciliation before retry')
     backup = state / 'database.sql'
@@ -384,10 +523,11 @@ def prepare(request):
     replace_json(state / 'backup.json', {'sha256': backup_sha256, 'bytes': backup.stat().st_size})
     owner = root.stat()
     require(owner.st_uid != 0, 'A regular project owner is required')
+    replace_json(state / 'preparation.pending', {'attempt_id': request['attempt_id']})
     destination.mkdir(mode=stat.S_IMODE(owner.st_mode), exist_ok=True)
     os.chown(str(destination), owner.st_uid, owner.st_gid)
     command(['cp', '-a', str(root) + '/.', str(destination)], timeout=900)
-    manifest(destination)
+    require(configuration_files(value, manifest(destination)) == configuration_files(value, value['files']), 'Source configuration files changed during copy')
     for base, directories, files in os.walk(str(destination)):
         for name in directories + files:
             os.chown(str(Path(base) / name), owner.st_uid, owner.st_gid)
@@ -448,16 +588,39 @@ def prepare(request):
     review_compose = isolated_compose(compose, db_service, web_service, review_network, review_subnet)
     web_mounts = [str(destination / mount['relative']) + ':' + mount['target'] + (':ro' if mount['read_only'] else '') for mount in value['mounts']]
     review_compose['services'][web_service]['volumes'] = web_mounts + [tools + ':/opt/i7y/tools:ro', str(state / 'wordpress') + ':/opt/i7y/state']
-    db_mounts = review_compose['services'][db_service].get('volumes', [])
-    data_mounts = [mount for mount in db_mounts if isinstance(mount, str) and len(mount.split(':')) in (2, 3) and mount.split(':')[1] == '/var/lib/mysql']
-    require(len(data_mounts) == 1 and data_mounts[0].split(':')[0] in review_compose.get('volumes', {}), 'The review database requires one named volume')
-    review_compose['services'][db_service]['volumes'] = data_mounts
+    review_compose['services'][db_service]['volumes'] = database_volumes(review_compose['services'][db_service], review_compose.get('volumes', {}))
     replace_json(state / 'publish-compose.json', compose)
     replace_json(state / 'compose.json', review_compose)
     replace_json(compose_path, review_compose)
     result = {'review_network': review_network, 'compose_path': str(compose_path), 'state_path': str(state), 'wordpress_root': value['wordpress_root'], 'database_name': value['database_name'], 'database_service': db_service, 'web_service': web_service, 'backup_sha256': backup_sha256}
     private_json(state / 'prepared.json', result)
+    (state / 'preparation.pending').unlink()
     return result
+
+
+def database_volumes(service, volumes):
+    mounts = service.get('volumes', [])
+    require(isinstance(mounts, list), 'The review database requires one named volume')
+    data = []
+    for mount in mounts:
+        if isinstance(mount, str):
+            parts = mount.split(':')
+            require(len(parts) in (2, 3), 'Unsupported database volume shape')
+            source, target = parts[:2]
+            named = source in volumes
+        elif isinstance(mount, dict):
+            source, target = mount.get('source'), mount.get('target')
+            require(isinstance(source, str) and isinstance(target, str) and mount.get('type') in ('bind', 'volume'), 'Unsupported database volume shape')
+            named = mount['type'] == 'volume' and source in volumes
+        else:
+            raise CopyError('Unsupported database volume shape')
+        if target == '/var/lib/mysql':
+            require(named, 'The review database requires one named volume')
+            data.append(mount)
+        else:
+            require(target in ('/var/www/app', '/app'), 'Unsupported additional database mount')
+    require(len(data) == 1, 'The review database requires one named volume')
+    return data
 
 
 def activate(request):
@@ -506,28 +669,27 @@ def verify_isolation(request, require_web=False):
 
 
 def release_backup_attempt(request):
-    state, plan = load_plan(request)
-    attempt = request.get('attempt_id', '')
-    require(re.fullmatch(r'[a-f0-9]{32}', attempt) is not None, 'Invalid copy attempt identifier')
-    active = state / 'attempt.active'
-    require(active.is_file() and json.loads(active.read_text()).get('attempt_id') == attempt, 'Copy attempt owner mismatch')
-    require(not (state / 'backup.pending').exists() and not (state / 'database.sql').exists(), 'Backup outcome requires reconciliation before retry')
-    log = state / 'backup.stderr'
-    require(log.is_file() and 'I7Y_BACKUP_CLEAN' in log.read_text().splitlines(), 'Backup cleanup was not confirmed')
-    exec_ids = json.loads(command(['docker', 'inspect', '--format', '{{json .ExecIDs}}', plan['source']['database_id']]))
-    require(not exec_ids, 'The source database still has active exec sessions')
-    active.unlink()
+    with owned_attempt(request) as (state, plan, active):
+        require(not (state / 'backup.pending').exists() and not (state / 'database.sql').exists(), 'Backup outcome requires reconciliation before retry')
+        log = state / 'backup.stderr'
+        require(log.is_file() and 'I7Y_BACKUP_CLEAN' in log.read_text().splitlines(), 'Backup cleanup was not confirmed')
+        stopped_backup(state, plan, request['attempt_id'])
+        active.unlink()
+    return {'released': True}
+
+
+def release_download_attempt(request):
+    with owned_attempt(request) as (state, _, active):
+        require(not (state / 'backup.pending').exists(), 'Backup outcome requires reconciliation before retry')
+        require(not (state / 'preparation.pending').exists(), 'File copy outcome requires reconciliation before retry')
+        active.unlink()
     return {'released': True}
 
 
 def release_health_attempt(request):
-    state, _ = load_plan(request)
-    attempt = request.get('attempt_id', '')
-    require(re.fullmatch(r'[a-f0-9]{32}', attempt) is not None, 'Invalid copy attempt identifier')
-    active = state / 'attempt.active'
-    require(active.is_file() and json.loads(active.read_text()).get('attempt_id') == attempt, 'Copy attempt owner mismatch')
-    require((state / 'restored').is_file() and (state / 'finalized').is_file() and not (state / 'activated.json').exists() and not (state / 'backup.pending').exists(), 'Copy attempt requires reconciliation')
-    active.unlink()
+    with owned_attempt(request) as (state, _, active):
+        require((state / 'restored').is_file() and (state / 'finalized').is_file() and not (state / 'activated.json').exists() and not (state / 'backup.pending').exists(), 'Copy attempt requires reconciliation')
+        active.unlink()
     return {'released': True}
 
 
@@ -571,6 +733,12 @@ def verify(request):
 
 
 def finish(request):
+    state, _ = load_plan(request)
+    with exclusive_lock(state / 'attempt.lock'), exclusive_lock(state.parent / 'copy.guard'):
+        return finish_started(request)
+
+
+def finish_started(request):
     state, plan = load_plan(request)
     require((state / 'verified.json').is_file(), 'The copied site must pass HTTP and database verification before completion')
     verified = json.loads((state / 'verified.json').read_text())
@@ -591,19 +759,20 @@ def finish(request):
     active = state / 'attempt.active'
     require(lock.is_dir() and (lock / 'owner.json').is_file() and json.loads((lock / 'owner.json').read_text()).get('operation_id') == request['operation_id'], 'Operation lock owner mismatch')
     require(active.is_file() and json.loads(active.read_text()).get('attempt_id') == request.get('attempt_id'), 'Copy attempt owner mismatch')
-    replace_json(state / 'completed.json', {'completed_at': int(time.time()), 'review_required': False})
-    (lock / 'owner.json').unlink()
-    lock.rmdir()
-    active.unlink()
+    completed = {'completed_at': int(time.time()), 'review_required': False, 'attempt_id': request['attempt_id']}
+    replace_json(state / 'completed.json', completed)
+    cleanup_completed(request, state, completed)
     return dict(public_plan(plan['source']), review_required=False, operation_id=request['operation_id'])
 
 
 def main():
     try:
-        require(len(sys.argv) == 3 and sys.argv[1] in ('preview', 'reserve', 'prepare', 'activate', 'verify_network_prestart', 'verify_isolation', 'release_backup_attempt', 'release_health_attempt', 'cleanup_isolation', 'verify', 'finish'), 'Unsupported project copy phase')
+        require(len(sys.argv) == 3 and sys.argv[1] in ('preview', 'reserve', 'backup', 'prepare', 'activate', 'verify_network_prestart', 'verify_isolation', 'release_backup_attempt', 'release_download_attempt', 'release_health_attempt', 'cleanup_isolation', 'verify', 'finish'), 'Unsupported project copy phase')
         request = json.loads(Path(sys.argv[2]).read_text())
         result = globals()[sys.argv[1]](request)
         print(json.dumps(result, sort_keys=True))
+        if sys.argv[1] == 'backup':
+            return result['rc']
     except (CopyError, OSError, ValueError, KeyError, StopIteration) as error:
         print(json.dumps({'error': str(error) if isinstance(error, CopyError) else 'Project copy failed; inspect private operation state'}))
         return 1

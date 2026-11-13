@@ -128,26 +128,8 @@
                     checksum: sha256:ce34ddd838f7351d6759068d09793f26755463b4a4610a5a5c0a97b68220d85c
                     mode: '0600'
                 - name: Back up the source database without stopping it
-                  shell: |
-                    set -eu
-                    umask 077
-                    test ! -e '{{ i7y_copy.state_path }}/backup.pending'
-                    touch '{{ i7y_copy.state_path }}/backup.pending'
-                    set +e
-                    docker exec -i '{{ i7y_copy.database_id }}' /bin/sh < '{{ i7y_copy.state_path }}/tools/mysql-backup.sh' > '{{ i7y_copy.state_path }}/database.sql.partial' 2> '{{ i7y_copy.state_path }}/backup.stderr'
-                    status=$?
-                    set -e
-                    if [ "$status" -ne 0 ]; then
-                      if grep -qx I7Y_BACKUP_CLEAN '{{ i7y_copy.state_path }}/backup.stderr'; then rm '{{ i7y_copy.state_path }}/backup.pending'; fi
-                      exit "$status"
-                    fi
-                    test -s '{{ i7y_copy.state_path }}/database.sql.partial'
-                    sha256sum '{{ i7y_copy.state_path }}/database.sql.partial' | cut -d ' ' -f 1 > '{{ i7y_copy.state_path }}/database.sha256.partial'
-                    mv '{{ i7y_copy.state_path }}/database.sql.partial' '{{ i7y_copy.state_path }}/database.sql'
-                    mv '{{ i7y_copy.state_path }}/database.sha256.partial' '{{ i7y_copy.state_path }}/database.sha256'
-                    rm '{{ i7y_copy.state_path }}/backup.pending'
-                  args:
-                    executable: /bin/sh
+                  ansible.builtin.command:
+                    argv: ['{{ i7y_python }}', '{{ i7y_temporary.path }}/project_copy.py', backup, '{{ i7y_temporary.path }}/request.json']
                   when: not i7y_steps.results[0].stat.exists
                   no_log: true
                 - name: Copy files and generate independent private configuration
@@ -337,6 +319,13 @@
                 mode: '0600'
               delegate_to: localhost
       rescue:
+        - name: Release the completed download attempt
+          ansible.builtin.command:
+            argv: ['{{ i7y_python }}', '{{ i7y_temporary.path }}/project_copy.py', release_download_attempt, '{{ i7y_temporary.path }}/request.json']
+          when:
+            - i7y_phase == 'execute'
+            - (ansible_failed_task.name | default('')) in ['Fetch the checksum-pinned WP-CLI artifact', 'Read source Compose configuration', 'Preserve the parsed source Compose configuration', 'Read completed operation steps', 'Create a private tools directory', 'Stage the reviewed database and WordPress tools', 'Copy files and generate independent private configuration']
+            - not (ansible_failed_result.unreachable | default(false))
         - name: Release the confirmed stopped backup attempt
           ansible.builtin.command:
             argv: ['{{ i7y_python }}', '{{ i7y_temporary.path }}/project_copy.py', release_backup_attempt, '{{ i7y_temporary.path }}/request.json']

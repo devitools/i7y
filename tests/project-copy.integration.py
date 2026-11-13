@@ -17,7 +17,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class ProjectCopyPlaybook(unittest.TestCase):
     def run_command(self, args, data=None, check=True, timeout=240):
-        result = subprocess.run(args, input=data, capture_output=True, timeout=timeout)
+        result = subprocess.run(args, input=data, capture_output=True, timeout=timeout,
+                                env=dict(os.environ, ANSIBLE_CONFIG=str(ROOT / 'apps/automation/ansible/ansible.cfg')))
         if check and result.returncode:
             raise AssertionError(result.stdout.decode(errors='replace') + result.stderr.decode(errors='replace'))
         return result
@@ -52,7 +53,7 @@ require_once ABSPATH . 'wp-settings.php';
         self.run_command(['docker', 'network', 'create', proxy])
         self.addCleanup(self.run_command, ['docker', 'network', 'rm', proxy], check=False)
         compose = {'version': '3.5', 'services': {
-            'database': {'image': 'mysql:5.7', 'environment': {'MYSQL_DATABASE': 'source_site', 'MYSQL_USER': 'sourceuser', 'MYSQL_PASSWORD': 'disposable-source-password', 'MYSQL_ROOT_PASSWORD': 'disposable-root-password'}, 'volumes': ['data:/var/lib/mysql'], 'networks': ['internal']},
+            'database': {'image': 'mysql:5.7', 'environment': {'MYSQL_DATABASE': 'source_site', 'MYSQL_USER': 'sourceuser', 'MYSQL_PASSWORD': 'disposable-source-password', 'MYSQL_ROOT_PASSWORD': 'disposable-root-password'}, 'volumes': [{'type': 'volume', 'source': 'data', 'target': '/var/lib/mysql'}], 'networks': ['internal']},
             'web': {'image': 'webdevops/php-nginx:8.3', 'environment': {'WEB_DOCUMENT_ROOT': '/var/www/html'}, 'volumes': [str(site) + ':/var/www/html'], 'networks': ['internal', 'proxy']}},
             'volumes': {'data': {}}, 'networks': {'internal': {'internal': True}, 'proxy': {'external': {'name': proxy}}}}
         compose_path = app / 'docker-compose.yml'
@@ -111,6 +112,14 @@ require_once ABSPATH . 'wp-settings.php';
         values['i7y_phase'] = 'execute'
         parameters.write_text(json.dumps(values))
         full_playbook = fixture_playbook.read_text()
+        (site / 'wp-content/uploads').mkdir(exist_ok=True)
+        (site / 'wp-content/uploads/live.txt').write_text('Upload after preview')
+        download = '                - name: Fetch the checksum-pinned WP-CLI artifact'
+        fixture_playbook.write_text(full_playbook.replace(download, '                - name: Fetch the checksum-pinned WP-CLI artifact\n                  ansible.builtin.fail:\n                    msg: Fixture download interruption\n' + download))
+        download_failure = self.run_command(call, check=False, timeout=600)
+        self.assertNotEqual(download_failure.returncode, 0)
+        self.assertFalse((state / 'attempt.active').exists(), download_failure.stdout.decode(errors='replace'))
+        self.assertFalse(destination.exists())
         pause = '                    - name: Update the copied site domain while preserving plugins and theme'
         self.assertIn(pause, full_playbook)
         fixture_playbook.write_text(full_playbook.replace(pause, '                    - name: Simulate interrupted copy\n                      ansible.builtin.fail:\n                        msg: Fixture interruption after database restoration\n' + pause))
@@ -158,6 +167,7 @@ require_once ABSPATH . 'wp-settings.php';
         self.run_command(call, timeout=600)
         self.assertEqual(hashlib.sha256((state / 'database.sql').read_bytes()).hexdigest(), backup_digest)
         completed = json.loads(result_path.read_text())
+        self.assertEqual((destination / 'app/wordpress/wp-content/uploads/live.txt').read_text(), 'Upload after preview')
         self.assertFalse(completed['review_required'])
         self.assertNotIn(review['name'], self.run_command(['docker', 'network', 'ls', '--format', '{{.Name}}']).stdout.decode().splitlines())
         self.assertEqual(source_config, (site / 'wp-config.php').read_bytes())

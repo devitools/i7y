@@ -671,7 +671,7 @@ mod ping_tests {
 pub fn run_ansible_release(profile: &ControllerProfile, known_hosts: &Path, payload: Vec<u8>) -> Result<serde_json::Value, SshError> {
     let bootstrap = include_str!("../../../automation/ansible/files/run_release.py");
     let remote = format!("python3 -c '{}'", bootstrap.replace('\'', "'\"'\"'"));
-    let (_, output, errors) = run_command_with_timeout(profile, Path::new(&profile.identity_file), known_hosts, Some(&remote), Some(payload), Duration::from_secs(1200))?;
+    let (_, output, errors) = run_command_with_timeout(profile, Path::new(&profile.identity_file), known_hosts, Some(&remote), Some(payload), Duration::from_secs(14520))?;
     if output.trim().is_empty() { return Err(classify_failure(&errors)); }
     serde_json::from_str(&output).map_err(|_| SshError::InvalidDiagnostic)
 }

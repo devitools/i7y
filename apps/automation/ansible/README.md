@@ -18,19 +18,25 @@ release or overwrite the legacy Ansible repository.
 Project copy inspects internally, then executes from a single Copy project button.
 The initial inspection expires after ten minutes; a started operation can resume
 using its original identifier. The first adapter supports running two-container
-WordPress / MySQL 5.7 projects on one host. Unsupported layouts fail explicitly.
+WordPress / MySQL 5.7 projects on one host. Database data mounts support Compose
+short and long named-volume syntax. Unsupported layouts fail before copying files.
 
 The source remains running. Backups use a consistent InnoDB transaction or a global
 read lock when MEMORY tables are present. The locked dump is limited to 30 seconds,
 and its dedicated MySQL session must terminate before the backup can finish. A
 confirmed timeout releases its attempt for retry. If cleanup or the remote outcome
 cannot be confirmed, the pending marker remains and requires reconciliation. Files
-and database writes are not captured as one atomic application snapshot. The existing Compose service definitions,
+and database writes are not captured as one atomic application snapshot. Live
+WordPress content may change after inspection; project configuration, including
+Compose, `.env` and `wp-config.php`, must still match the approved configuration.
+The existing Compose service definitions,
 proxy network, plugins and theme settings are preserved. The destination is tested
 on an internal bridge with an isolated gateway and no published ports before it is
 connected to the proxy. This requires Docker Engine 28 or newer; incompatible
 network configurations stop the copy. Independent credentials live in the copied
-project's private `.env`. The action does not configure DNS.
+project's private `.env`. The action does not configure DNS. Backups use the local
+Docker Unix socket through Engine API v1.48 and record their exact exec identity;
+unrelated healthchecks and exec sessions do not block a confirmed safe retry.
 
 Completed backup, preparation, configuration, restoration and URL replacement steps
 are checkpointed. Resume reuses them. An incomplete restore may restart only the
@@ -41,6 +47,14 @@ attempt to finish or a known safe failure to release it. An uncertain interrupte
 attempt stays blocked for reconciliation. The desktop makes up to three additional
 attempts, 30 seconds apart, for transient errors while it remains open. Do not
 delete operation state manually.
+
+The playbook has a four-hour controller budget, and the desktop SSH connection
+allows two additional minutes for staging and the final response. A timeout with
+an uncertain managed-host outcome retains the reservation. Confirmed staging and
+preparation failures before file copying release only their own attempt marker.
+A durable controller receipt distinguishes a remote execution from a connection
+that failed before dispatch. Completed operations recover interrupted cleanup only
+when the retained marker belongs to the attempt recorded in `completed.json`.
 
 The system Ansible 2.9.1 installation remains a legacy compatibility path. Select a
 supported ansible-core version only after controller and managed Python compatibility
@@ -62,6 +76,7 @@ Run the contract and isolation checks:
 
 ```sh
 python3 tests/project-copy.test.py
+python3 tests/project-copy-backup.test.py
 .local/artifacts/ansible-runtime/bin/python tests/project-copy.integration.py
 ```
 

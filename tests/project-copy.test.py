@@ -241,12 +241,35 @@ class ProjectCopy(unittest.TestCase):
         (state / 'attempt.active').write_text(json.dumps({'attempt_id': self.request['attempt_id']}))
         (state / 'backup.stderr').write_text('I7Y_BACKUP_CLEAN\n')
         plan = {'source': self.model()}
-        with patch.object(module, 'load_plan', return_value=(state, plan)), patch.object(module, 'command', return_value='["still-running"]'):
-            with self.assertRaisesRegex(module.CopyError, 'active exec'):
+        exec_id = '1' * 64
+        (state / 'backup-exec.json').write_text(json.dumps({'attempt_id': self.request['attempt_id'], 'database_id': plan['source']['database_id'], 'exec_id': exec_id}))
+        inspected = {'ID': exec_id, 'ContainerID': plan['source']['database_id'], 'Running': True}
+        with patch.object(module, 'load_plan', return_value=(state, plan)), patch.object(module, 'docker_json', return_value=inspected):
+            with self.assertRaisesRegex(module.CopyError, 'backup exec is still running'):
                 module.release_backup_attempt(self.request)
         self.assertTrue((state / 'attempt.active').exists())
-        with patch.object(module, 'load_plan', return_value=(state, plan)), patch.object(module, 'command', return_value='null'):
+        inspected['Running'] = False
+        with patch.object(module, 'load_plan', return_value=(state, plan)), patch.object(module, 'docker_json', return_value=inspected) as inspect_exec, patch.object(module, 'command', side_effect=AssertionError('Unrelated exec sessions must not be inspected')):
             self.assertTrue(module.release_backup_attempt(self.request)['released'])
+            inspect_exec.assert_called_once_with('GET', '/exec/' + exec_id + '/json')
+        self.assertFalse((state / 'attempt.active').exists())
+
+    def test_download_failure_releases_only_matching_attempt_without_pending_backup(self):
+        state = self.root.parent / 'download-attempt'
+        state.mkdir()
+        (state / 'attempt.active').write_text(json.dumps({'attempt_id': self.request['attempt_id']}))
+        with patch.object(module, 'load_plan', return_value=(state, {})):
+            with self.assertRaisesRegex(module.CopyError, 'owner mismatch'):
+                module.release_download_attempt(dict(self.request, attempt_id='b' * 32))
+            (state / 'backup.pending').touch()
+            with self.assertRaisesRegex(module.CopyError, 'requires reconciliation'):
+                module.release_download_attempt(self.request)
+            (state / 'backup.pending').unlink()
+            (state / 'preparation.pending').touch()
+            with self.assertRaisesRegex(module.CopyError, 'requires reconciliation'):
+                module.release_download_attempt(self.request)
+            (state / 'preparation.pending').unlink()
+            self.assertTrue(module.release_download_attempt(self.request)['released'])
         self.assertFalse((state / 'attempt.active').exists())
 
     def test_health_failure_releases_only_matching_completed_attempt(self):
@@ -288,6 +311,42 @@ class ProjectCopy(unittest.TestCase):
             self.assertTrue(module.reserve(self.request)['completed'])
         self.assertFalse((state.parent / 'copy.lock').exists())
 
+    def completed_state(self):
+        state = self.root.parent / 'completed-attempt'
+        state.mkdir()
+        destination = Path(self.model()['destination_root'])
+        destination.mkdir()
+        (state / 'attempt.active').write_text(json.dumps({'attempt_id': self.request['attempt_id']}))
+        (state / 'verified.json').write_text(json.dumps({'source': 'source.example.com', 'destination': 'copy.example.com'}))
+        lock = state.parent / 'copy.lock'
+        lock.mkdir()
+        (lock / 'owner.json').write_text(json.dumps({'operation_id': self.request['operation_id']}))
+        return state, {'source': self.model(), 'request': self.request}
+
+    def test_completed_cleanup_recovers_only_the_completed_attempt(self):
+        state, plan = self.completed_state()
+        with patch.object(module, 'load_plan', return_value=(state, plan)):
+            with patch.object(module, 'cleanup_completed', side_effect=OSError('interrupted cleanup')):
+                with self.assertRaises(OSError):
+                    module.finish(self.request)
+            self.assertTrue((state / 'completed.json').exists())
+            with module.exclusive_lock(state / 'attempt.lock'):
+                with self.assertRaisesRegex(module.CopyError, 'requires reconciliation'):
+                    module.reserve(dict(self.request, attempt_id='b' * 32))
+            with patch.object(module, 'inspect', side_effect=AssertionError('Completed source must not be inspected')):
+                self.assertTrue(module.reserve(dict(self.request, attempt_id='b' * 32))['completed'])
+        self.assertFalse((state / 'attempt.active').exists())
+        self.assertFalse((state.parent / 'copy.lock').exists())
+
+    def test_completion_does_not_remove_a_different_attempt(self):
+        state, plan = self.completed_state()
+        (state / 'completed.json').write_text(json.dumps({'review_required': False, 'attempt_id': 'b' * 32}))
+        with patch.object(module, 'load_plan', return_value=(state, plan)):
+            with self.assertRaisesRegex(module.CopyError, 'requires reconciliation'):
+                module.reserve(self.request)
+        self.assertTrue((state / 'attempt.active').exists())
+        self.assertTrue((state.parent / 'copy.lock/owner.json').exists())
+
     def test_refuses_invalid_domains(self):
         for value in ['source.example.com', 'copy;id', '*.example.com', '-bad.example.com', 'a/../example.com', 'UPPER.example.com']:
             with self.subTest(value=value), self.assertRaises(module.CopyError):
@@ -327,16 +386,18 @@ class ProjectCopy(unittest.TestCase):
         with self.assertRaises(module.CopyError):
             self.model()
 
-    def test_refuses_symbolic_links_and_detects_changed_files(self):
+    def test_refuses_symbolic_links_and_detects_changed_configuration(self):
         first = module.manifest(self.root)
         (self.root / 'app/public/wp-load.php').write_text('changed')
         self.assertNotEqual(first, module.manifest(self.root))
+        self.assertEqual(module.configuration_files(self.model(), first), module.configuration_files(self.model(), module.manifest(self.root)))
+        (self.root / 'app/public/wp-config.php').write_text('changed configuration')
         state = self.root.parent / 'changed-operation'
         state.mkdir()
         (state / 'started.json').write_text('{}')
         value = dict(self.model(), files=first)
         with patch.object(module, 'load_plan', return_value=(state, {'source': value, 'request': self.request})):
-            with self.assertRaisesRegex(module.CopyError, 'Source files changed'):
+            with self.assertRaisesRegex(module.CopyError, 'Source configuration files changed'):
                 module.prepare(self.request)
         self.assertFalse(Path(value['destination_root']).exists())
         (self.root / 'escape').symlink_to('/etc/passwd')
@@ -364,6 +425,41 @@ class ProjectCopy(unittest.TestCase):
 
     def test_multiple_internal_networks_are_distinct(self):
         self.check_preparation(False, multiple_networks=True)
+
+    def test_preparation_accepts_live_content_changes(self):
+        self.check_preparation(False, live_files=True)
+
+    def test_configuration_in_the_document_root_remains_protected(self):
+        value = dict(self.model(), wordpress_root='/var/www/app')
+        (self.root / 'app/.env').write_text('CONFIG=approved')
+        approved = module.configuration_files(value, module.manifest(self.root))
+        for relative in ('app/.env', 'app/docker-compose.yml'):
+            with self.subTest(path=relative):
+                path = self.root / relative
+                original = path.read_text()
+                path.write_text('Changed configuration')
+                self.assertNotEqual(approved, module.configuration_files(value, module.manifest(self.root)))
+                path.write_text(original)
+
+    def test_preparation_supports_compose_long_volume_syntax(self):
+        self.check_preparation(False, long_volume=True)
+
+    def test_unsupported_database_volumes_fail_before_copying(self):
+        state = self.root.parent / 'invalid-mount'
+        state.mkdir()
+        (state / 'started.json').touch()
+        value = dict(self.model(), files=module.manifest(self.root))
+        for mounts in [[{'type': 'bind', 'source': '/srv/data', 'target': '/var/lib/mysql'}],
+                       [{'type': 'volume', 'source': 'undeclared', 'target': '/var/lib/mysql'}],
+                       ['data:/var/lib/mysql', 'data:/var/lib/mysql'],
+                       ['/var/lib/mysql'], [42]]:
+            compose = {'services': {'database': {'volumes': mounts}, 'web': {}}, 'volumes': {'data': {}}}
+            (state / 'source-compose.json').write_text(json.dumps(compose))
+            with self.subTest(mounts=mounts), patch.object(module, 'load_plan', return_value=(state, {'source': value})), patch.object(module, 'command', return_value=''):
+                with self.assertRaises(module.CopyError):
+                    module.prepare(self.request)
+                self.assertFalse(Path(value['destination_root']).exists())
+                self.assertFalse((state / 'preparation.pending').exists())
 
     def test_domain_rewrite_preserves_longer_hosts(self):
         text = 'source.example.com www.source.example.com source.example.com.evil not-source.example.com source.example.com-db'
@@ -466,7 +562,7 @@ class ProjectCopy(unittest.TestCase):
             with self.assertRaisesRegex(module.CopyError, 'domain'):
                 module.verify(self.request)
 
-    def check_preparation(self, domain_services, multiple_networks=False):
+    def check_preparation(self, domain_services, multiple_networks=False, live_files=False, long_volume=False):
         state = self.root.parent / 'operation'
         state.mkdir(mode=0o700)
         (state / 'started.json').write_text('{}')
@@ -476,6 +572,8 @@ class ProjectCopy(unittest.TestCase):
             'database': {'image': 'mysql:5.7', 'environment': {'MYSQL_ROOT_PASSWORD': '${MYSQL_ROOT_PASSWORD}', 'MYSQL_DATABASE': '${MYSQL_DATABASE}', 'MYSQL_USER': '${MYSQL_USER}', 'MYSQL_PASSWORD': '${MYSQL_PASSWORD}'}, 'volumes': ['data:/var/lib/mysql'], 'networks': ['internal']},
             'web': {'image': 'webdevops/php-nginx:8.3', 'environment': {'VIRTUAL_HOST': 'source.example.com', 'MYSQL_PASSWORD': '${MYSQL_PASSWORD}'}, 'volumes': ['.:/var/www/app'], 'networks': ['internal', 'reverse-proxy']}},
             'volumes': {'data': {'driver': 'local'}}, 'networks': {'internal': {'driver': 'bridge'}, 'reverse-proxy': {'external': {'name': 'reverse-proxy'}}}}
+        if long_volume:
+            source_compose['services']['database']['volumes'] = [{'type': 'volume', 'source': 'data', 'target': '/var/lib/mysql', 'volume': {'nocopy': True}}]
         if multiple_networks:
             source_compose['networks']['other'] = {'driver': 'bridge'}
             source_compose['services']['web']['networks'].append('other')
@@ -487,6 +585,10 @@ class ProjectCopy(unittest.TestCase):
         (self.root / 'app/.env').write_text('SITE=source.example.com\nUNRELATED=source.example.com.evil\n')
         value = dict(self.model(), files=module.manifest(self.root))
         plan = {'source': value, 'fingerprint': module.digest(value), 'request': self.request}
+        if live_files:
+            (self.root / 'app/public/wp-content/uploads').mkdir(parents=True)
+            (self.root / 'app/public/wp-content/uploads/new.txt').write_text('New live upload')
+            (self.root / 'app/public/wp-load.php').write_text('Changed live content')
         original_config = (self.root / 'app/public/wp-config.php').read_bytes()
         original_command = module.command
         def run(args, timeout=60):
@@ -503,6 +605,10 @@ class ProjectCopy(unittest.TestCase):
             result = module.prepare(self.request)
             self.assertEqual(module.prepare(self.request), result)
         review = json.loads(Path(result['compose_path']).read_text())
+        if long_volume:
+            self.assertEqual(review['services'][result['database_service']]['volumes'], source_compose['services']['database']['volumes'])
+        if live_files:
+            self.assertEqual((Path(value['destination_root']) / 'app/public/wp-content/uploads/new.txt').read_text(), 'New live upload')
         self.assertEqual(review['services'][result['web_service']]['networks'], ['i7y_review'])
         compose = json.loads((state / 'publish-compose.json').read_text())
         review_subnet = review['networks']['i7y_review']['ipam']['config'][0]['subnet']
