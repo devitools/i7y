@@ -17,7 +17,11 @@ configuration into the MCP client's configuration. For Codex this is
 command = "/Applications/i7y.app/Contents/MacOS/i7y-mcp"
 ```
 
-Keep the desktop process running. When a connection or action needs approval,
+Starting the MCP client and discovering tools do not request authorization. The
+connector opens the desktop connection when a tool is called, so the client can
+start before the desktop. Keep the desktop running while using its tools. The
+first data access after authorization expires requests read access; changes and
+operations require their own approval. When a request needs approval,
 i7y automatically opens a separate foreground authorization window, even when
 the main window is hidden. Review the client, signed-in account, organization and
 action. For inventory queries, macOS authentication starts automatically as the
@@ -238,3 +242,9 @@ approval, Keychain persistence, lock/reconnect, signed peer identity, the real
 1Password SSH connection and a disposable server/container pilot. A local build or
 isolated recipe test does not establish production readiness. No production
 controller is changed by building or testing the integration.
+
+## Desktop reconnection
+
+The stdio connector detects a closed idle desktop socket and opens a new verified connection before the next tool call. It repeats the client handshake, not the previous tool action. Read consent and mutation approval remain scoped to the new desktop connection and current session context.
+
+If a socket fails after a tool action was sent, its result remains uncertain: the connector does not replay that action. Reconcile the original request or operation status before considering another mutation. After updating the bundled connector, fully quit and reopen the MCP client to load the new executable.

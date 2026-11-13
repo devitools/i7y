@@ -926,17 +926,7 @@ pub fn start(app: tauri::AppHandle) {
                                     authorization_expires_at: 0,
                                 },
                             );
-                            let pending = Pending::new(
-                                nonce(),
-                                connection.clone(),
-                                ctx,
-                                "authorize_connection".into(),
-                                json!({"client":client,"duration_seconds":READ_AUTHORIZATION_SECONDS}),
-                                None,
-                            );
-                            let id = pending.id.clone();
-                            inner.pending.insert(id.clone(), pending);
-                            Ok(json!({"state":"approval_required","request_id":id}))
+                            Ok(json!({"state":"connected"}))
                         } else if msg["method"] == "call" {
                             tauri::async_runtime::block_on(call(
                                 &app,
