@@ -6,11 +6,12 @@ import { t, locale } from '../i18n'
 import { routeHash } from '../routes'
 import PageHeader from './PageHeader.vue'
 import PageActions from './PageActions.vue'
-import { containerStateText, containerSummary, containerGroup, memoryPercent, diskPercent, timestamp } from '../telemetry-summary'
+import { sameTelemetryData, containerStateText, containerSummary, containerGroup, memoryPercent, diskPercent, timestamp } from '../telemetry-summary'
 import TelemetryTrend from './TelemetryTrend.vue'
 const props=defineProps({canEdit:Boolean,initialServer:{type:String,default:null}})
 const q=useQuasar(), servers=ref([]), server=ref(props.initialServer), currentContainers=ref([]), agents=ref([]), samples=ref([]), latest=ref(null), days=ref(1/4), busy=ref(false), error=ref(''), secret=ref(''), confirming=ref<false | 'provision' | 'revoke'>(false), now=ref(Date.now()), settings=ref(false), settingsBusy=ref(false), rankingMetric=ref('cpu')
-let generation=0, timer=null, lookupGeneration=0
+let generation=0, timer=null, lookupGeneration=0, refreshing=false
+const clock=ref(Date.now())
 const options=computed(()=>{const list=servers.value.map(s=>({label:s.name || s.ip || s.id,value:s.id}));if(latest.value && !list.some(s=>s.value===latest.value.id))list.unshift({label:latest.value.name || latest.value.ip,value:latest.value.id});return list})
 const agent=computed(()=>agents.value.find(a=>a.server===server.value))
 const last=computed(()=>latest.value?.telemetry || null)
@@ -20,7 +21,7 @@ const windowsHost=computed(()=>last.value?.host?.operating_system?.family==='win
 const sessionLabel=value=>t(value===true?'RDP session active':value===false?'No active RDP session':'unknown')
 const sessionRows=computed(()=>samples.value.map(s=>({observed_at:s.observed_at,active:s.payload?.host?.rdp_session_active})).sort((a,b)=>timestamp(b.observed_at)-timestamp(a.observed_at)))
 const sessionColumns=computed(()=>[{name:'observed_at',label:t('Collected at'),field:'observed_at',format:date,align:'left' as const},{name:'active',label:t('RDP session'),field:'active',format:sessionLabel,align:'left' as const}])
-const stale=computed(()=>!!last.value?.observed_at && now.value-timestamp(last.value.observed_at)>900000)
+const stale=computed(()=>!!last.value?.observed_at && clock.value-timestamp(last.value.observed_at)>900000)
 const status=computed(()=>!last.value?.observed_at?'No telemetry':stale.value?'No communication':last.value.state || 'unknown')
 const statusColor=computed(()=>status.value==='healthy'?'positive':status.value==='degraded'?'warning':'grey')
 const rangeOptions=computed(()=>[{label:t('1 hour'),value:1/24},{label:t('6 hours'),value:1/4},{label:t('24 hours'),value:1},{label:t('7 days'),value:7}])
@@ -51,13 +52,23 @@ const containerLink=computed(()=>routeHash({view:'containers',server:server.valu
 const installLink=computed(()=>`#/servers/${server.value}/agent-installation`)
 async function lookup(value,done){const id=++lookupGeneration;try{const result=await inventoryPage('servers',{search:value,perPage:50,serverType:'VPS'});if(id===lookupGeneration)done(()=>servers.value=result.items.filter(s=>s.type==='VPS'));else done(()=>{})}catch{done(()=>{})}}
 function chooseServer(value){if(value)window.location.hash=routeHash({view:'telemetry',server:value})}
-async function refresh(){
+async function refresh(background=false){
  const id=++generation,selected=server.value
  if(!selected)return
- busy.value=true;error.value=''
- try{const [record,history,containers]=await Promise.all([management.get('servers',selected),telemetryApi.trends(selected,days.value),telemetryApi.containers(selected)]);if(id!==generation)return;latest.value=record;currentContainers.value=containers;samples.value=history;now.value=Date.now()}
+ refreshing=true
+ if(!background){busy.value=true;error.value=''}
+ try{
+  const [record,history,containers]=await Promise.all([management.get('servers',selected),telemetryApi.trends(selected,days.value),telemetryApi.containers(selected)])
+  if(id!==generation)return
+  const recordChanged=!sameTelemetryData(latest.value,record),historyChanged=!sameTelemetryData(samples.value,history),containersChanged=!sameTelemetryData(currentContainers.value,containers)
+  if(recordChanged)latest.value=record
+  if(containersChanged)currentContainers.value=containers
+  if(historyChanged)samples.value=history
+  if(!background || recordChanged || historyChanged || containersChanged)now.value=Date.now()
+  clock.value=Date.now();error.value=''
+ }
  catch{if(id===generation)error.value=t('Unable to load telemetry')}
- finally{if(id===generation)busy.value=false}
+ finally{if(id===generation){busy.value=false;refreshing=false}}
 }
 async function loadAgents(){settingsBusy.value=true;try{const keys=await telemetryApi.agents();agents.value=keys.items}catch{error.value=t('Unable to load telemetry')}finally{settingsBusy.value=false}}
 async function provision(){settingsBusy.value=true;secret.value='';try{const r=await telemetryApi.provision(server.value);secret.value=r.token;confirming.value=false;await loadAgents()}catch{error.value=t('Unable to create agent credential')}finally{settingsBusy.value=false}}
@@ -65,7 +76,7 @@ async function revoke(){settingsBusy.value=true;try{await telemetryApi.revoke(ag
 async function copyIp(){try{await navigator.clipboard.writeText(latest.value.ip);q.notify({message:t('Copied to clipboard'),type:'positive',position:'bottom-right',timeout:1500})}catch{q.notify({message:t('Unable to copy. Select the text manually.'),type:'negative'})}}
 async function copySecret(){try{await navigator.clipboard.writeText(secret.value);q.notify({message:t('Copied to clipboard'),color:'positive'})}catch{error.value=t('Unable to copy')}}
 watch(days,()=>refresh())
-onMounted(async()=>{if(server.value)refresh();else try{const result=await inventoryPage('servers',{perPage:50,serverType:'VPS'});servers.value=result.items.filter(s=>s.type==='VPS');if(servers.value[0])chooseServer(servers.value[0].id)}catch{error.value=t('Unable to load telemetry')};timer=setInterval(()=>{now.value=Date.now();if(server.value && !busy.value && !document.hidden)refresh()},60000)})
+onMounted(async()=>{if(server.value)refresh();else try{const result=await inventoryPage('servers',{perPage:50,serverType:'VPS'});servers.value=result.items.filter(s=>s.type==='VPS');if(servers.value[0])chooseServer(servers.value[0].id)}catch{error.value=t('Unable to load telemetry')};timer=setInterval(()=>{clock.value=Date.now();if(server.value && !refreshing && !document.hidden)refresh(true)},60000)})
 onUnmounted(()=>{generation++;lookupGeneration++;clearInterval(timer)})
 </script>
 
@@ -75,13 +86,13 @@ onUnmounted(()=>{generation++;lookupGeneration++;clearInterval(timer)})
  <q-banner v-if="error" role="alert" class="q-mb-md bg-negative text-white">{{error}}</q-banner>
  <q-card flat bordered class="telemetry-toolbar q-mb-md">
   <div class="telemetry-filters"><q-select :model-value="server" @update:model-value="chooseServer" :options="options" use-input fill-input hide-selected @filter="lookup" input-debounce="300" emit-value map-options outlined dense :label="t('Server')" class="telemetry-server"/><q-select v-model="days" :options="rangeOptions" emit-value map-options outlined dense :label="t('History')" class="telemetry-range"/></div>
-  <div class="telemetry-actions"><div v-if="latest" class="server-summary"><div><strong>{{latest.name}}</strong><span class="telemetry-ip">{{latest.ip || '—'}}<q-btn v-if="latest.ip" flat dense round size="sm" icon="content_copy" :aria-label="t('Copy IP')" @click="copyIp"><q-tooltip>{{t('Copy IP')}}</q-tooltip></q-btn></span><span v-if="operatingSystem" :title="t('Operating system')">{{operatingSystem}}</span></div><div class="telemetry-contact"><q-badge rounded :color="statusColor">{{t(status)}}</q-badge><span>{{t('Collected at')}}: {{date(last?.observed_at)}}</span><q-tooltip>{{t('Collection runs every five minutes')}}</q-tooltip></div></div><PageActions :actions="[{label:t('Refresh'),icon:'refresh',loading:busy,onClick:refresh}]" /></div>
+  <div class="telemetry-actions"><div v-if="latest" class="server-summary"><div><strong>{{latest.name}}</strong><span class="telemetry-ip">{{latest.ip || '—'}}<q-btn v-if="latest.ip" flat dense round size="sm" icon="content_copy" :aria-label="t('Copy IP')" @click="copyIp"><q-tooltip>{{t('Copy IP')}}</q-tooltip></q-btn></span><span v-if="operatingSystem" :title="t('Operating system')">{{operatingSystem}}</span></div><div class="telemetry-contact"><q-badge rounded :color="statusColor">{{t(status)}}</q-badge><span>{{t('Collected at')}}: {{date(last?.observed_at)}}</span><q-tooltip>{{t('Collection runs every five minutes')}}</q-tooltip></div></div><PageActions :actions="[{label:t('Refresh'),icon:'refresh',loading:busy,onClick:()=>refresh()}]" /></div>
  </q-card>
  <q-card v-if="!server && !busy" flat bordered class="telemetry-empty"><q-icon name="dns" size="36px" color="primary"/><h2>{{t('No servers available')}}</h2><q-btn flat no-caps color="primary" :label="t('Servers')" href="#/servers"/></q-card>
  <template v-if="server">
   <q-banner v-if="stale" class="telemetry-warning q-mb-md" rounded><template #avatar><q-icon name="schedule"/></template>{{t('Showing the last known condition')}} · {{t('No communication')}}</q-banner>
-  <q-card v-if="!busy && latest && !last?.observed_at" flat bordered class="telemetry-empty q-mb-md"><q-icon name="monitor_heart" size="36px" color="primary"/><h2>{{t('No telemetry')}}</h2><p>{{t('Install the daemon to see live server metrics.')}}</p><q-btn v-if="canEdit" no-caps unelevated color="primary" icon="terminal" :label="t('Install daemon')" :href="installLink"/></q-card>
-  <template v-else>
+  <q-card v-if="latest && !last?.observed_at" flat bordered class="telemetry-empty q-mb-md"><q-icon name="monitor_heart" size="36px" color="primary"/><h2>{{t('No telemetry')}}</h2><p>{{t('Install the daemon to see live server metrics.')}}</p><q-btn v-if="canEdit" no-caps unelevated color="primary" icon="terminal" :label="t('Install daemon')" :href="installLink"/></q-card>
+  <template v-else-if="latest">
    <q-card flat bordered class="metric-strip q-mb-md"><div v-for="metric in metrics" :key="metric.label" class="metric-cell"><div class="metric-label"><q-icon :name="metric.icon" size="18px"/>{{metric.label}}</div><strong :class="'text-'+metric.tone">{{metric.value}}</strong><small>{{metric.caption}}</small></div></q-card>
    <q-card flat bordered class="q-mb-md"><div class="panel-heading"><div><h2>{{t('Resource history')}}</h2><p>{{t('Host CPU and memory in the selected period')}}</p></div><q-badge v-if="stale" outline color="warning">{{t('No communication')}}</q-badge></div><q-separator/><div class="trend-grid"><TelemetryTrend :samples="samples" metric="cpu" :start="start" :end="now" label="CPU" color="#6366f1"/><TelemetryTrend :samples="samples" metric="memory" :start="start" :end="now" :label="t('Memory')" color="#0d9488"/></div></q-card>
    <div class="telemetry-grid q-mb-md" :style="hostOnly?{gridTemplateColumns:'1fr'}:undefined">

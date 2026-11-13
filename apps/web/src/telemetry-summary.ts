@@ -46,3 +46,7 @@ export function containerStateText(record) {
   const state = record.state || record.telemetry?.state || 'unknown'
   return ({missing:'Removed',removed:'Removed',running:record.telemetry?.health==='unhealthy'?'Unhealthy':record.telemetry?.health==='starting'?'Starting':'Running',exited:'Stopped',dead:'Dead',paused:'Paused',restarting:'Restarting',created:'Created',removing:'Removing'})[state] || 'Unknown'
 }
+
+export function sameTelemetryData(current, incoming) {
+  return JSON.stringify(current) === JSON.stringify(incoming)
+}
