@@ -1,6 +1,6 @@
-# i7y central push gateway
+# Central push gateway
 
-Standalone Go service that owns native APNs/FCM credentials and device tokens. Self-hosted i7y servers receive only a revocable capability for one binding. The server owns its durable event outbox; this gateway performs a synchronous, bounded provider handoff and keeps hash-only delivery receipts.
+Standalone multi-app Go service that owns native APNs/FCM credentials and device tokens. Each self-hosted backend receives only a revocable capability for one binding. i7y is the first client. The server owns its durable event outbox; this gateway performs a synchronous, bounded provider handoff and keeps hash-only delivery receipts.
 
 ## Run
 
@@ -30,8 +30,9 @@ Terminate HTTPS at your reverse proxy. Keep the service port private and disable
 
 | Variable | Meaning |
 | --- | --- |
+| `GATEWAY_CONFIG_FILE` | Optional JSON registry file. When configured, its exact application profiles replace the legacy allowlist/provider environment variables. Relative credential paths resolve against this file. |
 | `GATEWAY_ENCRYPTION_KEY` | Required base64 32-byte AES-GCM key. A startup check rejects a different key for an existing store. |
-| `GATEWAY_ALLOWED_APPS` | Required comma-separated exact `platform:app_id:environment` triples. Example file permits the iOS development bundle and Android package `com.devitools.i7y.mobile`. Add the iOS `production` triple only when distributing a production-signed build. |
+| `GATEWAY_ALLOWED_APPS` | Required without `GATEWAY_CONFIG_FILE`; comma-separated exact `platform:app_id:environment` triples. Example file permits the iOS development bundle and Android package `com.devitools.i7y.mobile`. Add the iOS `production` triple only when distributing a production-signed build. |
 | `GATEWAY_DB_PATH` | SQLite file; default `/data/gateway.db`. Persist the whole containing directory, including WAL files. |
 | `GATEWAY_LISTEN` | Default `:8080`. |
 | `GATEWAY_TRUSTED_PROXY_CIDRS` | Optional comma-separated proxy CIDRs. Only these peers may supply `X-Forwarded-For`; the nearest untrusted address is the client. Your proxy must append or overwrite the header. By default forwarding headers are ignored. |
@@ -40,9 +41,54 @@ Terminate HTTPS at your reverse proxy. Keep the service port private and disable
 | `APNS_PRODUCTION_PRIVATE_KEY_FILE`, `APNS_PRODUCTION_KEY_ID`, `APNS_PRODUCTION_TEAM_ID` | Optional dedicated production APNs signer. Production devices use this signer when configured; sandbox devices retain the existing `APNS_*` signer. JWT caches remain separate. |
 | `FCM_SERVICE_ACCOUNT_FILE` | Path to Google service-account JSON containing an RSA PKCS#8 key, project ID, and client email. The account needs FCM send permission in that project. |
 
-Every allowlisted platform must have its provider configured. One Apple team and one Firebase project are supported per gateway process. Android development and release builds use the Firebase project configured in the app; the environment field is an ownership namespace, not a separate FCM host. The FCM request restricts delivery to the allowlisted package name. Provider endpoints are fixed in production code; callers cannot select a provider URL.
+Every allowlisted platform must have its provider configured. The legacy environment configuration supports one default Apple team, an optional separate production signer, and one Firebase project. The JSON registry supports independent Apple teams and Firebase projects for every application/platform/environment profile. Android development and release builds use the Firebase project configured in the app; the environment field is an ownership namespace, not a separate FCM host. The FCM request restricts delivery to the allowlisted package name. Provider endpoints are fixed in production code; callers cannot select a provider URL.
 
 Run exactly one gateway instance per database on a local filesystem. A process lock prevents concurrent owners; SQLite transactions and a process mutex serialize enrollment, rebinding, revocation, and provider handoffs. This initial design favors revocation correctness over high throughput. At most 32 HTTP handlers are admitted, with a 12-second request deadline and an 8-second provider deadline; saturated requests receive 503. Do not place SQLite on network storage. Graceful shutdown allows up to 15 seconds for active requests.
+
+## Application profiles
+
+Set `GATEWAY_CONFIG_FILE=/run/secrets/gateway.json` to enable the registry. Start with [gateway.example.json](gateway.example.json), substitute your public identifiers and credential file paths, then mount that configuration alongside the read-only secrets. No credentials are embedded in the registry example. Each exact `platform`, `app_id`, and `environment` triple occurs once and selects its own signing credentials, authorization cache, and Android channel. iOS profiles require `apns`; Android profiles require `fcm` and `android_channel_id`. Unknown fields, duplicate profiles, missing signers, and mismatched provider/platform combinations fail startup. Provider URLs stay fixed. Registry changes take effect after restarting the single writer.
+
+Use separate profiles for sandbox and production APNs signers, even when the same bundle ID is used. Multiple profiles may refer to the same key file. Multiple Android apps or environments may share a Firebase service account, or select separate Firebase projects. The configured Android channel applies to registration challenges and notification sends; each app must create that channel before enrollment.
+
+## V2 enrollment and simultaneous bindings
+
+New clients use `/v2/registrations` and `/v2/registrations/<id>/confirm` with the same destination, challenge payload, possession proof, response fields, expiry, and rate limits documented for v1 below. A registration must be confirmed through the same API version that started it. Without management credentials, successful re-enrollment rotates authority and revokes previous bindings for the exact destination, including v1 bindings. It consumes other pending proofs for that destination.
+
+When an enrolled app receives a changed native token, preserve its existing backend bindings by starting authenticated enrollment:
+
+```http
+POST /v2/registrations
+Authorization: Bearer <management_token>
+Content-Type: application/json
+
+{"device_id":"<existing device_id>","platform":"ios","token":"<new native token>","environment":"production","app_id":"com.devitools.i7y.mobile"}
+```
+
+Confirm the new push challenge through `/v2/registrations/<id>/confirm` with both `{"nonce":"…"}` and the same management Bearer token. The gateway checks current authority again, requires the same app/platform/environment, updates the encrypted destination, and preserves the existing device ID, management token, binding IDs, send capabilities, and receipts. The confirmation response returns the existing `{device_id,management_token}`. Re-enrollment that superseded those credentials prevents a pending rotation from restoring them. If the new destination already belongs to a different device record, its older management authority and bindings are revoked before the proven destination moves to the authenticated device. A client that lost its management capability must use unauthenticated enrollment; a different native token cannot be associated with its old installation cryptographically.
+
+`POST /v2/bindings` and `DELETE /v2/bindings/<id>` use the v1 bodies, authorization, and responses below. A v2 create replaces only bindings for the same `(device_id, connection_id, server_instance_id)` tuple. Other connections and server instances remain active, including bindings originally created through v1. Repeating creation rotates that tuple's send capability; the client should store the latest successful response and serialize writes. A device may have at most 32 active bindings; creating a distinct 33rd returns `429 {"error":"binding_limit"}`. Replacement of an existing tuple remains possible at the limit. Deletion revokes only the specified binding. A legacy v1 create retains its existing behavior of replacing all bindings for that device.
+
+Existing i7y backends may continue sending their unchanged incident payload to `/v1/bindings/<id>/notifications` for either v1 or v2 bindings. New apps may use the generic API:
+
+```http
+POST /v2/bindings/<binding_id>/notifications
+Authorization: Bearer <send_token>
+Idempotency-Key: task-ready-1
+Content-Type: application/json
+
+{"event_id":"task-ready-1","type":"task.ready","title":"Task ready","body":"A public summary","data":{"task_id":"task-1"},"ttl":60}
+```
+
+The generic envelope accepts only `event_id`, `type`, `title`, `body`, `data`, and `ttl`. Event/type/idempotency identifiers use the v1 identifier grammar; title/body are single-line UTF-8 with maximum lengths of 120/512 bytes; TTL is 1–60 seconds. `data` is a string-to-string map with at most 32 entries, 512 bytes per value, and 2048 combined key/value bytes. Keys use the identifier grammar. Caller data cannot contain `kind`, `type`, `event_id`, `app_id`, `platform`, `environment`, `connection_id`, `server_instance_id`, `registration_id`, or `nonce`, nor FCM-reserved `from`, `message_type`, `google.*`, or `gcm.*` keys. These requests return 400. Gateway notification data copies the custom data, injects `kind` and `type` from the envelope, and injects the authorized event and app/platform/environment/connection/server context. APNs retains the existing Expo-compatible custom `body` data envelope; FCM uses its string `data` map. Generic collapse/display IDs include app, connection, server, event type, and event ID.
+
+V2 uses the same durable receipt states, bounded retry policy, revocation ordering, request/provider payload size limits, and response codes as the v1 sender below. Idempotency is scoped to the binding and canonical decoded envelope, including custom data. Reusing a key through the other API version conflicts with the original payload. Notification data remains an untrusted navigation hint; the destination app must authenticate to its backend before showing protected content.
+
+## Domain and database migration
+
+`push.devi.tools` is the canonical new public gateway. Keep `i7y-push.disk.ninja` serving the existing `/v1` routes directly for published clients; HTTP redirects are rejected by senders and are not a migration mechanism. Configure both HTTPS virtual hosts to proxy to the same gateway process, or configure `GATEWAY_PUBLIC_HOST=push.devi.tools,i7y-push.disk.ninja` for the production Compose reverse proxy. The default remains `i7y-push.disk.ninja` so an existing deployment is unchanged unless explicitly configured. The variable supplies both `VIRTUAL_HOST` and `LETSENCRYPT_HOST`; the gateway has no host-dependent credentials or device IDs.
+
+Move the existing complete SQLite data directory and preserve the exact `GATEWAY_ENCRYPTION_KEY`. Stop the old writer before opening that store in its replacement process. Do not initialize a second gateway/database for the second hostname. Startup adds registration metadata columns to the existing schema; existing device/binding IDs, hashed capabilities, encrypted tokens, pending v1 proofs, and receipt hashes remain usable. Both hostnames must reach that same store and writer throughout the transition. Back up the store and key before upgrading, and preserve WAL files by stopping the writer cleanly or using SQLite's backup operation. No deployment is performed by these source files.
 
 ## Device enrollment
 
@@ -132,6 +178,6 @@ APNs uses a native alert, HTTP/2, ES256 provider JWT, a short expiration, and a 
 
 Native tokens use AES-256-GCM with random nonces and destination-bound additional data. Destination lookup uses a SHA-256 hash of provider/application/environment/native token; management and send capabilities and challenge nonces are stored as SHA-256 hashes. Raw tokens, capability values, and notification payload bodies never enter receipt rows. Receipt rows contain only binding ID, idempotency/payload hashes, state/code, attempt count, and timestamps. Seven-day receipt retention is enforced on registration/send activity and by a five-minute janitor; expired proofs and old rate buckets are pruned alongside it. Backups need the same retention policy. Deleting a live SQLite row does not guarantee forensic erasure of old pages or backups.
 
-Tests use fake providers or local mock HTTP servers only. They cover proof replay/expiry, rate/attempt bounds, cross-device capabilities, reinstall rebinding, offline previous senders, handoff/revocation serialization, concurrent deduplication and collisions, retry/restart/expiry behavior, ciphertext/capability storage, APNs HTTP/2/JWT/header shape, FCM OAuth/JWT/cache/native payload shape, and provider error classes. They require no Apple or Firebase account. Real-device delivery, signing entitlements, Firebase project setup, and proxy/deployment configuration remain operator integration work.
+Tests use fake providers or local mock HTTP servers only. V2 coverage includes multiple simultaneous server bindings, migrated v1 compatibility, independent replacement/revocation, binding quotas, authenticated token rotation, reinstall authority loss, cross-app isolation, generic reserved context, native payload/channel shape, durable generic retries, and profile routing with separate Apple teams/Firebase projects. They also cover proof replay/expiry, rate/attempt bounds, cross-device capabilities, reinstall rebinding, offline previous senders, handoff/revocation serialization, concurrent deduplication and collisions, retry/restart/expiry behavior, ciphertext/capability storage, APNs HTTP/2/JWT/header shape, FCM OAuth/JWT/cache/native payload shape, and provider error classes. They require no Apple or Firebase account. Real-device delivery, signing entitlements, Firebase project setup, and proxy/deployment configuration remain operator integration work.
 
 Provider references: [APNs HTTP/2 and token authentication](https://developer.apple.com/library/archive/documentation/NetworkingInternet/Conceptual/RemoteNotificationsPG/CommunicatingwithAPNs.html), [FCM HTTP v1](https://firebase.google.com/docs/cloud-messaging/send/v1-api), [Google service-account OAuth](https://developers.google.com/identity/protocols/oauth2/service-account), and [FCM collapse behavior](https://firebase.google.com/docs/cloud-messaging/customize-messages/collapsible-message-types).

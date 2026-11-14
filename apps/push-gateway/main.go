@@ -38,20 +38,23 @@ type Destination struct {
 	AppID       string `json:"app_id"`
 }
 type Notification struct {
-	EventID        string    `json:"event_id"`
-	IncidentID     string    `json:"incident_id"`
-	OrganizationID string    `json:"organization_id"`
-	Title          string    `json:"title"`
-	Resource       string    `json:"resource"`
-	DeadlineAt     string    `json:"deadline_at,omitempty"`
-	Locale         string    `json:"locale,omitempty"`
-	TimeZone       string    `json:"time_zone,omitempty"`
-	Severity       string    `json:"severity"`
-	TTL            int       `json:"ttl"`
-	ConnectionID   string    `json:"-"`
-	RegistrationID string    `json:"-"`
-	Nonce          string    `json:"-"`
-	Deadline       time.Time `json:"-"`
+	EventID          string               `json:"event_id"`
+	IncidentID       string               `json:"incident_id"`
+	OrganizationID   string               `json:"organization_id"`
+	Title            string               `json:"title"`
+	Resource         string               `json:"resource"`
+	DeadlineAt       string               `json:"deadline_at,omitempty"`
+	Locale           string               `json:"locale,omitempty"`
+	TimeZone         string               `json:"time_zone,omitempty"`
+	Severity         string               `json:"severity"`
+	TTL              int                  `json:"ttl"`
+	ConnectionID     string               `json:"-"`
+	ServerInstanceID string               `json:"-"`
+	Generic          *GenericNotification `json:"-"`
+	Origin           Destination          `json:"-"`
+	RegistrationID   string               `json:"-"`
+	Nonce            string               `json:"-"`
+	Deadline         time.Time            `json:"-"`
 }
 type ProviderResult struct {
 	Accepted     bool
@@ -97,27 +100,9 @@ func main() {
 	if err != nil || len(key) != 32 {
 		log.Fatal("GATEWAY_ENCRYPTION_KEY must be a base64 32-byte key")
 	}
-	allowed := map[string]bool{}
-	for _, value := range strings.Split(os.Getenv("GATEWAY_ALLOWED_APPS"), ",") {
-		if strings.TrimSpace(value) != "" {
-			allowed[strings.TrimSpace(value)] = true
-		}
-	}
-	if len(allowed) == 0 {
-		log.Fatal("GATEWAY_ALLOWED_APPS is required")
-	}
-	provider, err := NewNativeProviderFromEnv()
+	provider, allowed, err := NewConfiguredProviderFromEnv()
 	if err != nil {
 		log.Fatal("invalid provider configuration: ", err)
-	}
-	for app := range allowed {
-		parts := strings.Split(app, ":")
-		if len(parts) != 3 || (parts[0] != "ios" && parts[0] != "android") || (parts[2] != "sandbox" && parts[2] != "production") || parts[1] == "" {
-			log.Fatal("invalid app allowlist")
-		}
-		if parts[0] == "ios" && provider.APNSKey == nil && (parts[2] != "production" || provider.productionAPNS == nil) || parts[0] == "android" && provider.FCMKey == nil {
-			log.Fatal("allowlisted platform has no provider credentials")
-		}
 	}
 	path := os.Getenv("GATEWAY_DB_PATH")
 	if path == "" {
@@ -216,6 +201,9 @@ func NewGateway(cfg Config, provider Provider) (*Gateway, error) {
  CREATE TABLE IF NOT EXISTS receipts(binding_id TEXT NOT NULL,key_hash TEXT NOT NULL,payload_hash TEXT NOT NULL,state TEXT NOT NULL,code TEXT NOT NULL,attempts INTEGER NOT NULL,lease_until INTEGER NOT NULL,expires INTEGER NOT NULL,created INTEGER NOT NULL,PRIMARY KEY(binding_id,key_hash));
  CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS rates(key_hash TEXT NOT NULL,bucket INTEGER NOT NULL,count INTEGER NOT NULL,PRIMARY KEY(key_hash,bucket));`)
+	if err == nil {
+		err = migrateRegistrations(db)
+	}
 	if err != nil {
 		db.Close()
 		return nil, err
@@ -310,6 +298,16 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var err error
 	switch {
+	case r.Method == "POST" && r.URL.Path == "/v2/registrations":
+		err = g.registerV2(w, r)
+	case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v2/registrations/") && strings.HasSuffix(r.URL.Path, "/confirm"):
+		err = g.confirm(w, r, strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v2/registrations/"), "/confirm"))
+	case r.Method == "POST" && r.URL.Path == "/v2/bindings":
+		err = g.bind(w, r)
+	case r.Method == "DELETE" && strings.HasPrefix(r.URL.Path, "/v2/bindings/"):
+		err = g.revoke(w, r, strings.TrimPrefix(r.URL.Path, "/v2/bindings/"))
+	case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v2/bindings/") && strings.HasSuffix(r.URL.Path, "/notifications"):
+		err = g.notifyV2(w, r, strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v2/bindings/"), "/notifications"))
 	case r.Method == "POST" && r.URL.Path == "/v1/registrations":
 		err = g.register(w, r)
 	case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/registrations/") && strings.HasSuffix(r.URL.Path, "/confirm"):
@@ -396,6 +394,9 @@ func (g *Gateway) register(w http.ResponseWriter, r *http.Request) error {
 	if err := decode(w, r, &d); err != nil {
 		return err
 	}
+	return g.startRegistration(w, r, d, "")
+}
+func (g *Gateway) startRegistration(w http.ResponseWriter, r *http.Request, d Destination, deviceID string) error {
 	if d.Platform == "ios" {
 		d.Token = strings.ToLower(d.Token)
 	}
@@ -417,9 +418,24 @@ func (g *Gateway) register(w http.ResponseWriter, r *http.Request) error {
 	if err := g.rate("start:token:"+dh, 3); err != nil {
 		return err
 	}
+	managementHash := ""
+	if deviceID != "" {
+		var platform, app, environment string
+		err := g.db.QueryRow(`SELECT platform,app_id,environment,management_hash FROM devices WHERE id=? AND active=1`, deviceID).Scan(&platform, &app, &environment, &managementHash)
+		if err == sql.ErrNoRows || err == nil && (!capMatches(bearer(r), managementHash) || platform != d.Platform || app != d.AppID || environment != d.Environment) {
+			return denied()
+		}
+		if err != nil {
+			return err
+		}
+	}
+	version := 1
+	if strings.HasPrefix(r.URL.Path, "/v2/") {
+		version = 2
+	}
 	id, nonce := randomToken(), randomToken()
 	expires := g.cfg.Now().Add(g.cfg.ProofTTL).Unix()
-	_, err := g.db.Exec(`INSERT INTO registrations(id,destination_hash,platform,app_id,environment,token_cipher,nonce_hash,expires) VALUES(?,?,?,?,?,?,?,?)`, id, dh, d.Platform, d.AppID, d.Environment, g.encrypt(d.Token, dh), hash(nonce), expires)
+	_, err := g.db.Exec(`INSERT INTO registrations(id,destination_hash,platform,app_id,environment,token_cipher,nonce_hash,expires,api_version,device_id,management_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, id, dh, d.Platform, d.AppID, d.Environment, g.encrypt(d.Token, dh), hash(nonce), expires, version, deviceID, managementHash)
 	if err != nil {
 		return err
 	}
@@ -474,8 +490,9 @@ func (g *Gateway) confirm(w http.ResponseWriter, r *http.Request, id string) err
 	var dh, platform, app, environment, nonceHash string
 	var cipherToken []byte
 	var expires int64
-	var attempts, ready int
-	err := g.db.QueryRow(`SELECT destination_hash,platform,app_id,environment,token_cipher,nonce_hash,expires,attempts,ready FROM registrations WHERE id=?`, id).Scan(&dh, &platform, &app, &environment, &cipherToken, &nonceHash, &expires, &attempts, &ready)
+	var attempts, ready, version int
+	var rotationDevice, rotationHash string
+	err := g.db.QueryRow(`SELECT destination_hash,platform,app_id,environment,token_cipher,nonce_hash,expires,attempts,ready,api_version,device_id,management_hash FROM registrations WHERE id=?`, id).Scan(&dh, &platform, &app, &environment, &cipherToken, &nonceHash, &expires, &attempts, &ready, &version, &rotationDevice, &rotationHash)
 	if err == sql.ErrNoRows {
 		return denied()
 	}
@@ -486,8 +503,15 @@ func (g *Gateway) confirm(w http.ResponseWriter, r *http.Request, id string) err
 	if err != nil {
 		return err
 	}
-	if expires <= g.cfg.Now().Unix() || attempts >= 5 || ready != 1 || !capMatches(body.Nonce, nonceHash) {
+	expectedVersion := 1
+	if strings.HasPrefix(r.URL.Path, "/v2/") {
+		expectedVersion = 2
+	}
+	if expires <= g.cfg.Now().Unix() || attempts >= 5 || ready != 1 || version != expectedVersion || !capMatches(body.Nonce, nonceHash) {
 		return denied()
+	}
+	if rotationDevice != "" {
+		return g.confirmRotation(w, r, rotationDevice, rotationHash, dh, platform, app, environment, cipherToken)
 	}
 	management := randomToken()
 	deviceID := randomToken()
@@ -556,7 +580,19 @@ func (g *Gateway) bind(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.Exec(`UPDATE bindings SET active=0 WHERE device_id=?`, body.DeviceID); err != nil {
+	if strings.HasPrefix(r.URL.Path, "/v2/") {
+		var active int
+		if err = tx.QueryRow(`SELECT count(*) FROM bindings WHERE device_id=? AND active=1 AND NOT(connection_id=? AND server_instance_id=?)`, body.DeviceID, body.ConnectionID, body.ServerInstanceID).Scan(&active); err != nil {
+			return err
+		}
+		if active >= maxDeviceBindings {
+			return apiError{429, "binding_limit"}
+		}
+		_, err = tx.Exec(`UPDATE bindings SET active=0 WHERE device_id=? AND connection_id=? AND server_instance_id=?`, body.DeviceID, body.ConnectionID, body.ServerInstanceID)
+	} else {
+		_, err = tx.Exec(`UPDATE bindings SET active=0 WHERE device_id=?`, body.DeviceID)
+	}
+	if err != nil {
 		return err
 	}
 	if _, err = tx.Exec(`INSERT INTO bindings(id,device_id,connection_id,server_instance_id,send_hash) VALUES(?,?,?,?,?)`, id, body.DeviceID, body.ConnectionID, body.ServerInstanceID, hash(send)); err != nil {
@@ -613,12 +649,14 @@ func (g *Gateway) notify(w http.ResponseWriter, r *http.Request, id string) erro
 	if !n.validate() {
 		return apiError{400, "invalid_notification"}
 	}
+	payload, _ := json.Marshal(n)
+	return g.sendNotification(w, r, id, n, hash(string(payload)))
+}
+func (g *Gateway) sendNotification(w http.ResponseWriter, r *http.Request, id string, n Notification, ph string) error {
 	key := r.Header.Get("Idempotency-Key")
 	if !identifier.MatchString(key) {
 		return apiError{400, "invalid_idempotency_key"}
 	}
-	payload, _ := json.Marshal(n)
-	ph := hash(string(payload))
 	kh := hash(key)
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -631,7 +669,7 @@ func (g *Gateway) notify(w http.ResponseWriter, r *http.Request, id string) erro
 	var d Destination
 	var ciphertext []byte
 	var dh, stored, deviceID string
-	err := g.db.QueryRow(`SELECT b.send_hash,b.connection_id,d.platform,d.app_id,d.environment,d.token_cipher,d.destination_hash,d.id FROM bindings b JOIN devices d ON d.id=b.device_id WHERE b.id=? AND b.active=1 AND d.active=1`, id).Scan(&stored, &n.ConnectionID, &d.Platform, &d.AppID, &d.Environment, &ciphertext, &dh, &deviceID)
+	err := g.db.QueryRow(`SELECT b.send_hash,b.connection_id,b.server_instance_id,d.platform,d.app_id,d.environment,d.token_cipher,d.destination_hash,d.id FROM bindings b JOIN devices d ON d.id=b.device_id WHERE b.id=? AND b.active=1 AND d.active=1`, id).Scan(&stored, &n.ConnectionID, &n.ServerInstanceID, &d.Platform, &d.AppID, &d.Environment, &ciphertext, &dh, &deviceID)
 	if err == sql.ErrNoRows {
 		return denied()
 	}
@@ -641,6 +679,7 @@ func (g *Gateway) notify(w http.ResponseWriter, r *http.Request, id string) erro
 	if !capMatches(bearer(r), stored) {
 		return denied()
 	}
+	n.Origin = d
 	now := g.cfg.Now().Unix()
 	var existingHash, state, code string
 	var attempts int

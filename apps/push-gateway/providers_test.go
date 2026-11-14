@@ -285,3 +285,37 @@ func TestAPNSEnvironmentUsesSeparateSigningKeys(t *testing.T) {
 		t.Fatal("missing sends")
 	}
 }
+
+func TestGenericNativePayloadAndConfiguredAndroidChannel(t *testing.T) {
+	destination := Destination{Platform: "android", AppID: "com.example.other", Environment: "production", Token: strings.Repeat("t", 30)}
+	n := Notification{EventID: "generic-1", Title: "Ready", Resource: "Public body", TTL: 60, ConnectionID: "connection-1", ServerInstanceID: "server-2", Generic: &GenericNotification{Type: "task.ready", Data: map[string]string{"task_id": "task-1"}}, Origin: destination}
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if json.NewDecoder(r.Body).Decode(&captured) != nil {
+			t.Error("invalid payload JSON")
+		}
+		w.WriteHeader(200)
+	}))
+	defer server.Close()
+	p := &NativeProvider{Client: server.Client(), FCMKey: testRSA(t), fcmURL: server.URL, fcmToken: "cached-token", fcmExpires: time.Now().Add(time.Hour), AndroidChannel: "tasks"}
+	if result := p.Send(context.Background(), destination, n); !result.Accepted {
+		t.Fatal(result)
+	}
+	message := captured["message"].(map[string]any)
+	android := message["android"].(map[string]any)
+	data := message["data"].(map[string]any)
+	if android["restricted_package_name"] != destination.AppID || android["notification"].(map[string]any)["channel_id"] != "tasks" || data["task_id"] != "task-1" || data["connection_id"] != "connection-1" || message["notification"].(map[string]any)["body"] != "Public body" {
+		t.Fatal(captured)
+	}
+	p.APNSKey, p.APNSKeyID, p.APNSTeamID = testECDSA(t), "KEY", "TEAM"
+	p.apnsSandbox = server.URL
+	destination.Platform, destination.Environment, destination.Token = "ios", "sandbox", strings.Repeat("a", 64)
+	n.Origin = destination
+	if result := p.Send(context.Background(), destination, n); !result.Accepted {
+		t.Fatal(result)
+	}
+	data = captured["body"].(map[string]any)
+	if data["task_id"] != "task-1" || data["platform"] != "ios" || captured["aps"].(map[string]any)["alert"].(map[string]any)["body"] != "Public body" {
+		t.Fatal(captured)
+	}
+}

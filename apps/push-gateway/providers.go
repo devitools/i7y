@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto"
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -34,6 +33,7 @@ type NativeProvider struct {
 	APNSTeamID     string
 	FCMKey         *rsa.PrivateKey
 	FCMEmail       string
+	AndroidChannel string
 	FCMProject     string
 	apnsProduction string
 	apnsSandbox    string
@@ -53,8 +53,12 @@ type serviceAccount struct {
 	ClientEmail string `json:"client_email"`
 }
 
+func newNativeProvider() *NativeProvider {
+	return &NativeProvider{Client: &http.Client{Timeout: 8 * time.Second, Transport: &http.Transport{ForceAttemptHTTP2: true, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, ResponseHeaderTimeout: 7 * time.Second, MaxIdleConns: 20, MaxIdleConnsPerHost: 10, IdleConnTimeout: 60 * time.Second}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, apnsProduction: "https://api.push.apple.com", apnsSandbox: "https://api.sandbox.push.apple.com", oauthURL: "https://oauth2.googleapis.com/token", requireHTTP2: true}
+}
+
 func NewNativeProviderFromEnv() (*NativeProvider, error) {
-	p := &NativeProvider{Client: &http.Client{Timeout: 8 * time.Second, Transport: &http.Transport{ForceAttemptHTTP2: true, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, ResponseHeaderTimeout: 7 * time.Second, MaxIdleConns: 20, MaxIdleConnsPerHost: 10, IdleConnTimeout: 60 * time.Second}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, apnsProduction: "https://api.push.apple.com", apnsSandbox: "https://api.sandbox.push.apple.com", oauthURL: "https://oauth2.googleapis.com/token", requireHTTP2: true}
+	p := newNativeProvider()
 	if err := loadAPNSSigner(p, "APNS_"); err != nil {
 		return nil, err
 	}
@@ -66,27 +70,11 @@ func NewNativeProviderFromEnv() (*NativeProvider, error) {
 		p.productionAPNS = production
 	}
 	if path := os.Getenv("FCM_SERVICE_ACCOUNT_FILE"); path != "" {
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return nil, errors.New("cannot read FCM service account")
+		if err := loadFCMAccount(p, path); err != nil {
+			return nil, err
 		}
-		var account serviceAccount
-		if json.Unmarshal(raw, &account) != nil || account.Type != "service_account" || account.ProjectID == "" || account.ClientEmail == "" {
-			return nil, errors.New("invalid FCM service account")
-		}
-		key, err := parseKey([]byte(account.PrivateKey))
-		if err != nil {
-			return nil, errors.New("invalid FCM signing key")
-		}
-		var ok bool
-		p.FCMKey, ok = key.(*rsa.PrivateKey)
-		if !ok || p.FCMKey.N.BitLen() < 2048 {
-			return nil, errors.New("FCM requires RSA 2048 or stronger")
-		}
-		p.FCMEmail = account.ClientEmail
-		p.FCMProject = account.ProjectID
-		p.fcmURL = "https://fcm.googleapis.com/v1/projects/" + url.PathEscape(account.ProjectID) + "/messages:send"
 	}
+
 	if p.APNSKey == nil && p.productionAPNS == nil && p.FCMKey == nil {
 		return nil, errors.New("configure at least one provider")
 	}
@@ -94,27 +82,15 @@ func NewNativeProviderFromEnv() (*NativeProvider, error) {
 }
 func loadAPNSSigner(p *NativeProvider, prefix string) error {
 	if path := os.Getenv(prefix + "PRIVATE_KEY_FILE"); path != "" {
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return errors.New("cannot read APNs signing key")
-		}
-		key, err := parseKey(raw)
-		if err != nil {
-			return errors.New("invalid APNs signing key")
-		}
-		var ok bool
-		p.APNSKey, ok = key.(*ecdsa.PrivateKey)
-		if !ok || p.APNSKey.Curve != elliptic.P256() {
-			return errors.New("APNs requires a P-256 key")
-		}
-		p.APNSKeyID, err = envRequired(prefix + "KEY_ID")
+		keyID, err := envRequired(prefix + "KEY_ID")
 		if err != nil {
 			return err
 		}
-		p.APNSTeamID, err = envRequired(prefix + "TEAM_ID")
+		teamID, err := envRequired(prefix + "TEAM_ID")
 		if err != nil {
 			return err
 		}
+		return loadAPNSFile(p, path, keyID, teamID)
 	}
 	return nil
 }
@@ -199,6 +175,21 @@ func (p *NativeProvider) fcmAuthorization(ctx context.Context) (string, error) {
 	return p.fcmToken, nil
 }
 func notificationData(n Notification) map[string]string {
+	if n.Generic != nil {
+		data := make(map[string]string, len(n.Generic.Data)+8)
+		for key, value := range n.Generic.Data {
+			data[key] = value
+		}
+		data["kind"] = n.Generic.Type
+		data["type"] = n.Generic.Type
+		data["event_id"] = n.EventID
+		data["connection_id"] = n.ConnectionID
+		data["server_instance_id"] = n.ServerInstanceID
+		data["app_id"] = n.Origin.AppID
+		data["platform"] = n.Origin.Platform
+		data["environment"] = n.Origin.Environment
+		return data
+	}
 	if n.RegistrationID != "" {
 		return map[string]string{"kind": "registration_challenge", "registration_id": n.RegistrationID, "nonce": n.Nonce}
 	}
@@ -207,6 +198,9 @@ func notificationData(n Notification) map[string]string {
 func collapseID(n Notification) string {
 	if n.RegistrationID != "" {
 		return hash("registration:" + n.RegistrationID)
+	}
+	if n.Generic != nil {
+		return hash(n.Origin.AppID + "\x00" + n.ConnectionID + "\x00" + n.ServerInstanceID + "\x00" + n.Generic.Type + "\x00" + n.EventID)
 	}
 	return hash(n.ConnectionID + "\x00" + n.OrganizationID + "\x00" + n.IncidentID)
 }
@@ -289,7 +283,11 @@ func (p *NativeProvider) sendFCM(ctx context.Context, d Destination, n Notificat
 	if ttl <= 0 {
 		return ProviderResult{Permanent: true, Code: "expired"}
 	}
-	payload := map[string]any{"message": map[string]any{"token": d.Token, "notification": map[string]string{"title": n.Title, "body": n.Resource}, "data": notificationData(n), "android": map[string]any{"priority": "HIGH", "ttl": fmt.Sprintf("%ds", ttl), "restricted_package_name": d.AppID, "notification": map[string]string{"channel_id": "incidents", "tag": collapseID(n)}}}}
+	channel := p.AndroidChannel
+	if channel == "" {
+		channel = "incidents"
+	}
+	payload := map[string]any{"message": map[string]any{"token": d.Token, "notification": map[string]string{"title": n.Title, "body": n.Resource}, "data": notificationData(n), "android": map[string]any{"priority": "HIGH", "ttl": fmt.Sprintf("%ds", ttl), "restricted_package_name": d.AppID, "notification": map[string]string{"channel_id": channel, "tag": collapseID(n)}}}}
 	raw, err := json.Marshal(payload)
 	if err != nil || len(raw) > 4096 {
 		return ProviderResult{Permanent: true, Code: "payload_size"}

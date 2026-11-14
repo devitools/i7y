@@ -5,9 +5,9 @@ services:
     env_file:
       - ./gateway.env
     environment:
-      VIRTUAL_HOST: i7y-push.disk.ninja
+      VIRTUAL_HOST: ${GATEWAY_PUBLIC_HOST:-i7y-push.disk.ninja}
       VIRTUAL_PORT: "8080"
-      LETSENCRYPT_HOST: i7y-push.disk.ninja
+      LETSENCRYPT_HOST: ${GATEWAY_PUBLIC_HOST:-i7y-push.disk.ninja}
     expose:
       - "8080"
     networks:

@@ -1,0 +1,42 @@
+{
+  "profiles": [
+    {
+      "platform": "ios",
+      "app_id": "com.devitools.i7y.mobile",
+      "environment": "sandbox",
+      "apns": {
+        "private_key_file": "apns-development.p8",
+        "key_id": "DEVELOPMENT_KEY_ID",
+        "team_id": "APPLE_TEAM_ID"
+      }
+    },
+    {
+      "platform": "ios",
+      "app_id": "com.devitools.i7y.mobile",
+      "environment": "production",
+      "apns": {
+        "private_key_file": "apns-production.p8",
+        "key_id": "PRODUCTION_KEY_ID",
+        "team_id": "APPLE_TEAM_ID"
+      }
+    },
+    {
+      "platform": "android",
+      "app_id": "com.devitools.i7y.mobile",
+      "environment": "production",
+      "android_channel_id": "incidents",
+      "fcm": {
+        "service_account_file": "i7y-firebase.json"
+      }
+    },
+    {
+      "platform": "android",
+      "app_id": "com.example.future",
+      "environment": "production",
+      "android_channel_id": "updates",
+      "fcm": {
+        "service_account_file": "future-firebase.json"
+      }
+    }
+  ]
+}
