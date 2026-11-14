@@ -1,3 +1,4 @@
+version: '3.7'
 services:
   gateway:
     image: ${I7Y_PUSH_COMPAT_IMAGE:?Set I7Y_PUSH_COMPAT_IMAGE to the verified nginx image}
@@ -16,7 +17,7 @@ services:
     read_only: true
     tmpfs:
       - /var/cache/nginx:uid=101,gid=101,mode=0755
-      - /var/run:uid=101,gid=101,mode=0755
+      - /run:uid=101,gid=101,mode=0755
     cap_drop:
       - ALL
     security_opt:
