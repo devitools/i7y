@@ -368,12 +368,36 @@ class OnePasswordAccountTests(unittest.TestCase):
         self.assertIn('type=STRING,type=URL', item)
         self.assertEqual(self.reference['account'], 'Disk Ninja')
 
-    def test_known_url_uuid_and_user_id_select_the_same_account_without_name_lookup(self):
-        for selector in ['fixture.1password.com', 'https://fixture.1password.com/', self.primary, 'C' * 26]:
+    def test_explicit_sign_in_address_and_id_go_directly_to_the_cli(self):
+        for selector in ['fixture.1password.com', 'https://fixture.1password.com/', 'team.1password.ca', 'team.1password.eu', self.primary, 'C' * 26]:
             self.calls = []
             self.read({**self.reference, 'account': selector})
-            self.assertEqual([args[1:3] for args in self.calls], [['account', 'list'], ['item', 'get']])
-            self.assertEqual(self.calls[-1][self.calls[-1].index('--account') + 1], self.primary)
+            self.assertEqual([args[1:3] for args in self.calls], [['item', 'get']])
+            self.assertEqual(self.calls[-1][self.calls[-1].index('--account') + 1], selector)
+
+    def test_explicit_address_does_not_depend_on_account_enumeration(self):
+        self.accounts = []
+        self.read({**self.reference, 'account': 'fixture.1password.com'})
+        self.assertEqual([call[1:3] for call in self.calls], [['item', 'get']])
+        self.assertIn('type=STRING,type=URL', self.calls[0])
+
+    def test_malformed_addresses_are_rejected_before_any_cli_access(self):
+        for selector in ['http://fixture.1password.com', 'https://user@fixture.1password.com', 'fixture.1password.com:443', 'fixture.1password.com/item', 'fixture.1password.com?x=1', 'fixture.1password.com#x', 'https://other.example.com']:
+            self.calls = []
+            with self.subTest(selector=selector), self.assertRaises(power.Failure) as error:
+                self.read({**self.reference, 'account': selector})
+            self.assertEqual(error.exception.reason, 'invalid_target')
+            self.assertEqual(self.calls, [])
+
+    def test_explicit_account_never_falls_back_to_another_account(self):
+        reference = {**self.reference, 'account': 'fixture.1password.com'}
+        response = unittest.mock.Mock(returncode=1, stdout=b'', stderr=b'No accounts configured')
+        with patch.object(power.vaults, 'executable', return_value='/fixture/op'), patch.object(power.vaults.subprocess, 'run', return_value=response) as run:
+            with self.assertRaises(power.Failure):
+                power.vault_item(reference, metadata=True)
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.args[0][1:3], ['item', 'get'])
+        self.assertEqual(run.call_args.args[0][run.call_args.args[0].index('--account') + 1], reference['account'])
 
     def test_ambiguous_missing_and_unverified_names_never_read_items(self):
         for mode in ['ambiguous', 'missing', 'unverified', 'wrong-id']:
@@ -405,7 +429,7 @@ class OnePasswordAccountTests(unittest.TestCase):
 
     def test_duplicate_account_identifiers_never_select_a_default_user(self):
         self.accounts.append({**self.accounts[0], 'user_uuid': 'E' * 26})
-        for selector in ['fixture.1password.com', self.primary, 'C' * 26, 'E' * 26, 'Disk Ninja']:
+        for selector in ['Disk Ninja', 'fixture-shortname']:
             with self.subTest(selector=selector):
                 self.calls = []
                 with self.assertRaises(power.Failure) as error:
@@ -428,7 +452,7 @@ class OnePasswordAccountTests(unittest.TestCase):
                         if args[1:3] == ['account', 'list'] and phase == 'item':
                             return unittest.mock.Mock(returncode=0, stdout=json.dumps(self.accounts).encode())
                         return unittest.mock.Mock(returncode=1, stdout=b'fixture-secret', stderr=detail)
-                    reference = {**self.reference, 'account': 'fixture.1password.com'}
+                    reference = {**self.reference, 'account': 'Disk Ninja' if phase == 'accounts' else 'fixture.1password.com'}
                     with patch.object(power.vaults, 'executable', return_value='/fixture/op'), patch.object(power.vaults.subprocess, 'run', side_effect=failed):
                         with self.assertRaises(power.Failure) as error:
                             power.vault_item(reference, metadata=True)

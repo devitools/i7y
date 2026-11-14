@@ -38,6 +38,9 @@ The Python adapter lives in `i7y_vault.py` and the desktop embeds that module in
 isolated runner, so it does not depend on the working directory or temporary files.
 Accounts, items and adapter options are resolved independently for server/workspace.
 An empty legacy account uses the adapter's default account.
+An explicit sign-in address or ID is passed unchanged to `op --account`, without
+listing accounts first or falling back to a different account. Friendly display
+names still require verified, unambiguous account discovery before reading an item.
 
 In **Power and disk → Credential configuration**, choose **Load configuration**.
 The desktop reads text and URL fields from the linked server item locally using

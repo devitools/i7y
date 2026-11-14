@@ -76,6 +76,10 @@ class OnePassword:
         selector = self.reference.get('account', '')
         if not selector:
             return ''
+        if re.fullmatch(r'[A-Za-z0-9]{26}', selector) or re.fullmatch(r'(?:https://)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+1password\.(?:com|ca|eu)/?', selector, re.I):
+            return selector
+        if '://' in selector or re.search(r'1password\.(?:com|ca|eu)(?:[:/?#]|$)', selector, re.I):
+            raise Failure('invalid_target')
         cli = executable('op')
         deadline = time.monotonic() + 45
 
