@@ -201,6 +201,12 @@ def quoted(value):
     return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
 
 
+def boot_password_prompt(output):
+    clean = re.sub(rb'\x1b\[[0-?]*[ -/]*[@-~]', b'', output)
+    return re.search(rb'(?i)(?:passphrase|password)[^\r\n]*:', clean) or re.search(
+        rb'(?i)Please enter (?:passphrase|password) for disk [^\r\n]*\(luks-[a-f0-9-]{36}\)![ \t]*$', clean)
+
+
 class Boot:
     def __init__(self, request):
         self.request = request
@@ -273,10 +279,11 @@ class Boot:
                 output += chunk
                 if len(output) > 32768:
                     raise Failure('unlock_unconfirmed')
-                if re.search(rb'(?i)(?:passphrase|password)[^\r\n]*:', output):
+                prompt = boot_password_prompt(output)
+                if prompt:
                     if sent:
                         raise Failure('disk_key_rejected')
-                    if self.target['luks_uuid'].encode() not in output.lower():
+                    if self.target['luks_uuid'].encode() not in prompt.group().lower():
                         raise Failure('unlock_unconfirmed')
                     process.stdin.write(secret.encode() + b'\n')
                     process.stdin.flush()

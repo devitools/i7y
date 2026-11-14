@@ -219,6 +219,42 @@ class PowerTests(unittest.TestCase):
             boot.unlock(self.secret)
         self.assertEqual(error.exception.reason, 'disk_key_rejected')
 
+    def test_colored_systemd_disk_prompt_without_colon_unlocks_only_its_bound_disk(self):
+        boot = power.Boot.__new__(power.Boot)
+        boot.target = {'luks_uuid': UUID}
+        prompt = '\x1b[1;39mPlease enter passphrase for disk QEMU_HARDDISK (luks-' + UUID + ')! \x1b[0m'
+        script = 'import sys;sys.stdout.write(' + repr(prompt) + ');sys.stdout.flush();value=sys.stdin.readline().strip();sys.exit(0 if value==' + repr(self.secret) + ' else 1)'
+        boot.args = lambda _: [sys.executable, '-u', '-c', script]
+        boot.unlock(self.secret)
+        boot.target = {'luks_uuid': '00000000-0000-0000-0000-000000000000'}
+        with self.assertRaises(power.Failure) as error:
+            boot.unlock(self.secret)
+        self.assertEqual(error.exception.reason, 'unlock_unconfirmed')
+
+    def test_disk_uuid_in_an_earlier_message_cannot_authorize_another_prompt(self):
+        boot = power.Boot.__new__(power.Boot)
+        boot.target = {'luks_uuid': UUID}
+        prompt = 'Status: luks-' + UUID + '\nPlease enter passphrase for another disk: '
+        script = 'import sys;sys.stdout.write(' + repr(prompt) + ');sys.stdout.flush();sys.stdin.readline()'
+        boot.args = lambda _: [sys.executable, '-u', '-c', script]
+        with self.assertRaises(power.Failure) as error:
+            boot.unlock(self.secret)
+        self.assertEqual(error.exception.reason, 'unlock_unconfirmed')
+
+    def test_repeated_systemd_prompt_is_not_answered(self):
+        boot = power.Boot.__new__(power.Boot)
+        boot.target = {'luks_uuid': UUID}
+        prompt = '\x1b[1;39mPlease enter passphrase for disk QEMU_HARDDISK (luks-' + UUID + ')! \x1b[0m'
+        script = 'import sys;sys.stdout.write(' + repr(prompt) + ');sys.stdout.flush();sys.stdin.readline();sys.stdout.write(' + repr(prompt) + ');sys.stdout.flush();sys.stdin.readline()'
+        boot.args = lambda _: [sys.executable, '-u', '-c', script]
+        with self.assertRaises(power.Failure) as error:
+            boot.unlock(self.secret)
+        self.assertEqual(error.exception.reason, 'disk_key_rejected')
+
+    def test_bang_in_an_unrelated_message_is_not_a_password_prompt(self):
+        self.assertIsNone(power.boot_password_prompt(b'Password unavailable!'))
+        self.assertIsNone(power.boot_password_prompt(b'Please enter passphrase for a database!'))
+
 
 class CredentialFieldTests(unittest.TestCase):
     def test_provider_login_uses_builtin_fields_instead_of_another_sections_password(self):
