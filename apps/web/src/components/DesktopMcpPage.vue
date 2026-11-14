@@ -7,9 +7,15 @@ import {inventoryPage,pb,activeOrganization} from '../api'
 import {t} from '../i18n'
 import {approvalError,clientName,pendingRequests,requestState,requestTitle} from '../mcp-presentation'
 import {requestTab} from '../mcp-requests'
+import {mcpPort,mcpConnectionJson} from '../mcp-connection'
 import PageHeader from './PageHeader.vue'
 import McpRequestReview from './McpRequestReview.vue'
-const overview=ref<any>(null),error=ref(''),busy=ref(false),tab=ref('requests'),copied=ref(false)
+const overview=ref<any>(null),error=ref(''),busy=ref(false),tab=ref('requests'),copied=ref('')
+const portDraft=ref<string|number|null>(null),portEdited=ref(false),portSaved=ref(false)
+const validPort=computed(()=>mcpPort(portDraft.value))
+const portChanged=computed(()=>validPort.value!==overview.value?.http?.port||!overview.value?.http?.ready)
+const connectionPreview=computed(()=>mcpConnectionJson(overview.value?.http,true))
+watch(()=>overview.value?.http?.port,port=>{if(!portEdited.value)portDraft.value=port??null},{flush:'sync'})
 const action=ref('server_inspect'),target=ref(null),targets=ref([]),operation=ref<any>(null),result=ref<any>(null)
 const preparedSelection=ref('')
 const contextKey=computed(()=>JSON.stringify([desktopBackend.value,activeOrganization.value,overview.value?.context]))
@@ -43,7 +49,18 @@ async function refresh(){
 async function perform(fn:()=>Promise<unknown>){busy.value=true;error.value='';try{await fn();await refresh()}catch(cause){error.value=typeof cause==='string'?cause:t('Desktop request failed.')}finally{busy.value=false}}
 async function toggle(enabled:boolean){await perform(()=>invoke('mcp_enable',{enabled}))}
 async function decide(id:string,approve:boolean){busy.value=true;error.value='';try{await invoke('mcp_decide',{requestId:id,approve});await refresh()}catch(cause){error.value=approvalError(cause)}finally{busy.value=false}}
-async function copyConfig(){await perform(async()=>{await copyToClipboard(overview.value.config);copied.value=true})}
+async function copyConnection(kind:string){await perform(async()=>{const value=kind==='config'?mcpConnectionJson(overview.value?.http):overview.value?.http?.[kind];if(!value)return;await copyToClipboard(value);copied.value=kind})}
+function editPort(value:string|number|null){portDraft.value=value;portEdited.value=true;portSaved.value=false}
+async function savePort(){
+  const port=validPort.value
+  if(port===null||!portChanged.value)return
+  await perform(async()=>{
+    const http=await invoke<any>('mcp_http_configure',{port})
+    if(!alive)return
+    portEdited.value=false;portDraft.value=http.port;portSaved.value=true;copied.value=''
+    overview.value={...overview.value,http,config:http.config}
+  })
+}
 async function loadTargets(){target.value=null;targets.value=[];clearOperation();const selection=JSON.stringify([contextKey.value,action.value]);try{const resource=action.value.startsWith('container_')&&action.value!=='container_list'?'containers':'servers';const page=await inventoryPage(resource,{perPage:100});if(alive&&selection===JSON.stringify([contextKey.value,action.value]))targets.value=page.items.map(item=>({label:[item.name,item.server?.name,item.ip].filter(Boolean).join(' / '),value:item.id}))}catch{if(alive&&selection===JSON.stringify([contextKey.value,action.value]))error.value=t('Unable to load targets.')}}
 async function plan(){clearOperation();const selection=selectionKey.value,sequence=preparationSequence;await perform(async()=>{const inspect=['server_inspect','server_disk','container_list'].includes(action.value);const response=await invoke<any>('desktop_tool_call',{name:inspect?'inspect_resource':'plan_operation',arguments:{action:action.value,target:target.value}});if(!alive||sequence!==preparationSequence||selection!==selectionKey.value)return;result.value=response;operation.value=inspect?{operation_id:response.operation_id}:response.plan;preparedSelection.value=selection})}
 async function submit(){if(!canSubmit.value){clearOperation();return}const operationId=operation.value.operation_id,selection=selectionKey.value,sequence=preparationSequence;await perform(async()=>{const response=await invoke('desktop_tool_call',{name:'submit_operation',arguments:{operation_id:operationId}});if(!alive||sequence!==preparationSequence||selection!==selectionKey.value)return;result.value=response;selectTab('requests')})}
@@ -66,6 +83,7 @@ onUnmounted(()=>{alive=false;clearInterval(timer);window.removeEventListener('ha
       <q-banner v-if="error" rounded class="bg-negative text-white q-mb-md" role="alert">{{error}}</q-banner>
       <div class="mcp-service"><q-toggle :model-value="overview.enabled" :disable="busy || !overview.platform_supported" :label="t('Enable local MCP')" @update:model-value="toggle"/><p>{{t('Access requests appear automatically. Read access lasts 5 minutes; each change needs a new approval.')}}</p></div>
       <q-banner v-if="!overview.platform_supported">{{t('System authentication and MCP transport are not available on this platform yet.')}}</q-banner>
+      <q-banner v-else-if="overview.http && !overview.http.ready" class="bg-warning q-mb-md">{{overview.http.error}}</q-banner>
       <q-card flat bordered class="mcp-panel">
         <q-tabs :model-value="tab" align="left" dense no-caps active-color="primary" indicator-color="primary" class="panel-tabs" @update:model-value="selectTab">
           <q-tab name="requests"><span>{{t('Review requests')}}</span><q-badge v-if="requests.filter(p=>p.state==='approval_required').length" color="warning" class="q-ml-sm">{{requests.filter(p=>p.state==='approval_required').length}}</q-badge></q-tab><q-tab name="connections" :label="t('Connections')"/><q-tab name="operations" :label="t('Operations')"/><q-tab name="history" :label="t('History')"/>
@@ -79,7 +97,24 @@ onUnmounted(()=>{alive=false;clearInterval(timer);window.removeEventListener('ha
             <p>{{t('Client names are self-reported. Access is scoped to your selected backend and organization.')}}</p>
             <q-list v-if="overview.connections.length" bordered separator><q-item v-for="client in overview.connections" :key="client.id"><q-item-section><q-item-label>{{clientName(client.client)}}</q-item-label><q-item-label caption>{{overview.organization_name || t('Selected organization')}} · {{client.authorized?t('Read access authorized for 5 minutes'):t('Pending approval')}}</q-item-label><q-item-label v-if="client.authorized" caption>{{t('Expires')}}: {{new Date(client.authorization_expires_at*1000).toLocaleTimeString()}}</q-item-label></q-item-section><q-item-section side><q-btn no-caps flat :label="t('Revoke')" :disable="busy" @click="perform(()=>invoke('mcp_revoke',{connectionId:client.id}))"/></q-item-section></q-item></q-list>
             <p v-else>{{t('No agents connected.')}}</p>
-            <q-expansion-item :label="t('Configure Codex')" icon="settings" class="q-mt-lg"><div class="q-pa-md"><q-input :model-value="overview.config" type="textarea" autogrow readonly outlined :label="t('Codex MCP configuration')"/><q-btn no-caps flat icon="content_copy" :label="copied?t('Copied'):t('Copy configuration')" @click="copyConfig"/></div></q-expansion-item>
+            <q-expansion-item :label="t('MCP connection')" icon="settings" class="q-mt-lg">
+              <div class="q-pa-md mcp-connection">
+                <p>{{t('Use these connection details in any compatible MCP client.')}}</p>
+                <div class="mcp-port-row">
+                  <q-input :model-value="portDraft" type="number" inputmode="numeric" min="1024" max="65535" step="1" outlined :disable="busy || !overview.platform_supported" :label="t('HTTP port')" :error="portEdited && validPort===null" :error-message="t('Choose a whole-number port from 1024 to 65535')" @update:model-value="editPort"/>
+                  <q-btn no-caps color="primary" :label="t('Save port')" :loading="busy" :disable="validPort===null || !portChanged || !overview.platform_supported" @click="savePort"/>
+                </div>
+                <p class="mcp-connection-note">{{t('Changing the port disconnects clients. Update the URL in your clients after saving.')}}</p>
+                <p v-if="portSaved" role="status" class="text-positive">{{t('Port saved. Use the updated URL below.')}}</p>
+                <template v-if="overview.http?.ready">
+                  <q-input :model-value="overview.http.transport" readonly outlined :label="t('Transport')"/>
+                  <q-input :model-value="overview.http.url" readonly outlined :label="t('Server URL')"><template #append><q-btn flat round dense :icon="copied==='url'?'check':'content_copy'" :aria-label="t('Copy URL')" @click="copyConnection('url')"/></template></q-input>
+                  <q-input :model-value="overview.http.authorization" type="password" readonly outlined :label="t('Authorization header')"><template #append><q-btn flat round dense :icon="copied==='authorization'?'check':'content_copy'" :aria-label="t('Copy authorization header')" @click="copyConnection('authorization')"/></template></q-input>
+                  <p class="mcp-connection-note">{{t('The local credential connects the client. Read access and changes still require approval in i7y.')}}</p>
+                  <q-expansion-item :label="t('Connection details (JSON)')" dense><q-input :model-value="connectionPreview" type="textarea" autogrow readonly outlined :label="t('Connection details (JSON)')"/><q-btn no-caps flat icon="content_copy" :label="copied==='config'?t('Copied'):t('Copy connection details')" @click="copyConnection('config')"/><p class="mcp-connection-note">{{t('Copy includes the local credential. Keep it private and adapt the fields to your client.')}}</p></q-expansion-item>
+                </template>
+              </div>
+            </q-expansion-item>
           </q-tab-panel>
           <q-tab-panel name="history">
             <q-btn no-caps flat :loading="busy" :label="t('Refresh history')" @click="loadHistory"/>
@@ -100,5 +135,5 @@ onUnmounted(()=>{alive=false;clearInterval(timer);window.removeEventListener('ha
   </q-page>
 </template>
 <style scoped>
-.mcp-service{display:flex;align-items:center;gap:24px;flex-wrap:wrap;margin-bottom:16px}.mcp-service p{margin:0;flex:1;min-width:220px;color:var(--i7y-muted);font-size:13px;line-height:21px}.mcp-panel{overflow:hidden}.mcp-request-list{display:grid;gap:16px;max-width:880px}.mcp-empty{padding:36px 16px;text-align:center}.mcp-empty h2{font-size:20px;font-weight:600;line-height:28px;margin:16px 0 8px}.mcp-empty p,.mcp-background-note{font-size:13px;color:var(--i7y-muted);line-height:21px}.mcp-background-note{margin-top:16px}.mcp-details{white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto;font-size:12px;padding:16px}
+.mcp-connection{max-width:760px;display:grid;gap:16px}.mcp-connection p{margin:0}.mcp-port-row{display:flex;align-items:flex-start;gap:12px}.mcp-port-row>.q-field{max-width:240px;flex:1}.mcp-port-row>.q-btn{margin-top:8px}.mcp-connection-note{font-size:13px;color:var(--i7y-muted);line-height:21px}.mcp-service{display:flex;align-items:center;gap:24px;flex-wrap:wrap;margin-bottom:16px}.mcp-service p{margin:0;flex:1;min-width:220px;color:var(--i7y-muted);font-size:13px;line-height:21px}.mcp-panel{overflow:hidden}.mcp-request-list{display:grid;gap:16px;max-width:880px}.mcp-empty{padding:36px 16px;text-align:center}.mcp-empty h2{font-size:20px;font-weight:600;line-height:28px;margin:16px 0 8px}.mcp-empty p,.mcp-background-note{font-size:13px;color:var(--i7y-muted);line-height:21px}.mcp-background-note{margin-top:16px}.mcp-details{white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto;font-size:12px;padding:16px}
 </style>

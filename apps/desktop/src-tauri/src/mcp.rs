@@ -42,6 +42,7 @@ pub struct Inner {
     pub generation: u64,
     pub lock_epoch: u64,
     pub session: Option<Session>,
+    pub backend: String,
     pub organization: String,
     pub organization_name: String,
     pub authenticating: Option<String>,
@@ -61,6 +62,7 @@ impl Inner {
         }
     }
     pub fn context(&self, backend: String) -> Result<Context, String> {
+        if self.backend != backend {return Err("Selected backend changed".into())}
         let session = self.session.as_ref().ok_or("Sign in to i7y desktop")?;
         if self.organization.is_empty() {
             return Err("Select an organization in i7y desktop".into());
@@ -196,14 +198,9 @@ pub fn nonce() -> String {
         .collect()
 }
 fn context(app: &tauri::AppHandle) -> Result<Context, String> {
-    let backend = app
-        .state::<crate::backend::Backend>()
-        .url
-        .lock()
-        .map_err(|_| "Backend unavailable")?
-        .clone()
-        .ok_or("Select a backend")?
-        .to_string();
+    let state = app.state::<crate::backend::Backend>();
+    let registry = state.connections.lock().map_err(|_| "Connections unavailable")?;
+    let backend = registry.connection(registry.selected.as_deref().ok_or("Select a backend")?)?.url.to_string();
     let service=app.state::<Service>();
     let mut inner=service.inner.lock().map_err(|_|"Session unavailable")?;
     let epoch=crate::platform::lock_epoch();
@@ -256,30 +253,15 @@ pub async fn api(
     expected: Option<&Context>,
 ) -> Result<Value, String> {
     let backend = app.state::<crate::backend::Backend>();
-    let url = backend
-        .url
-        .lock()
-        .map_err(|_| "Backend unavailable")?
-        .clone()
-        .ok_or("Select a backend")?;
     let service = app.state::<Service>();
-    let (token, org, generation) = {
+    let (connection_id, url, connection_generation, token, org, generation) = {
+        let registry = backend.connections.lock().map_err(|_| "Connections unavailable")?;
+        let id = registry.selected.as_deref().ok_or("Select a backend")?;
+        let (url, connection_generation, session) = registry.snapshot(id)?;
         let inner = service.inner.lock().map_err(|_| "Session unavailable")?;
-        if let Some(expected) = expected {
-            if inner.context(url.to_string())? != *expected {
-                return Err("Authorization context changed".into());
-            }
-        }
-        (
-            inner
-                .session
-                .as_ref()
-                .ok_or("Sign in required")?
-                .token
-                .clone(),
-            inner.organization.clone(),
-            inner.generation,
-        )
+        let context = inner.context(url.to_string())?;
+        if let Some(expected) = expected {if context != *expected {return Err("Authorization context changed".into())}}
+        (id.to_owned(),url,connection_generation,session.ok_or("Sign in required")?.token,inner.organization.clone(),inner.generation)
     };
     let mut request = backend
         .client
@@ -325,8 +307,9 @@ pub async fn api(
     {
         return Err("Authorization context changed".into());
     }
+    backend.connections.lock().map_err(|_| "Connections unavailable")?.current(&connection_id, connection_generation)?;
     if status.as_u16() == 401 {
-        crate::session::desktop_session_clear(app.clone())?;
+        crate::session::clear_if_current(app, &connection_id, connection_generation)?;
         return Err("Session expired; sign in to i7y desktop".into());
     }
     if !status.is_success() {
@@ -413,6 +396,14 @@ async fn execute(
         return Ok(result);
     }
     let call = i7y_mcp::tools::api_call(name, args)?;
+    if args["rule"]["model_version"] == 2 || matches!(name, "preview_alert_rule_migration" | "apply_alert_rule_migration") {
+        let capabilities=api(app,"GET","api/i7y/alerts/v2/metrics",vec![],None,None,None,Some(ctx)).await?;
+        guard.check(app)?;
+        if capabilities["capabilities"]["rule_model_version"] != 2 || capabilities["capabilities"]["exclusions"] != true || capabilities["capabilities"]["severity_reminders"] != true {
+            return Err("Update the selected backend to use type rules, exclusions and severity reminders".into());
+        }
+    }
+
     if matches!(name, "save_alert_rule" | "simulate_alert_rule")
         && args["rule"]["condition"].get("critical_value").is_some()
     {
@@ -599,13 +590,7 @@ pub fn mcp_overview(app: tauri::AppHandle) -> Result<Value, String> {
     let service = app.state::<Service>();
     let mut inner = service.inner.lock().map_err(|_| "MCP unavailable")?;
     inner.prune();
-    let executable = std::env::current_exe()
-        .map_err(|_| "Connector path unavailable")?
-        .with_file_name(if cfg!(windows) {
-            "i7y-mcp.exe"
-        } else {
-            "i7y-mcp"
-        });
+    let http = crate::mcp_http::overview(&app);
     let visible = |ctx: &Context| {
         selected
             .as_ref()
@@ -617,7 +602,7 @@ pub fn mcp_overview(app: tauri::AppHandle) -> Result<Value, String> {
             .unwrap_or(false)
     };
     Ok(
-        json!({"enabled":inner.enabled,"organization_name":inner.organization_name,"user_label":inner.session.as_ref().and_then(|s|s.record["email"].as_str().or_else(||s.record["name"].as_str())),"context":selected,"platform_supported":cfg!(target_os="macos"),"connections":inner.connections.values().filter(|c|visible(&c.context)).collect::<Vec<_>>(),"requests":inner.pending.values().filter(|p|visible(&p.context)).collect::<Vec<_>>(),"config":format!("[mcp_servers.i7y]\ncommand = {}\n",serde_json::to_string(&executable.to_string_lossy()).unwrap()),"authorization_provider":if cfg!(target_os="macos"){ "macos_local_authentication" }else if cfg!(windows){"windows_hello_unavailable"}else{"unavailable"}}),
+        json!({"enabled":inner.enabled,"organization_name":inner.organization_name,"user_label":inner.session.as_ref().and_then(|s|s.record["email"].as_str().or_else(||s.record["name"].as_str())),"context":selected,"platform_supported":cfg!(target_os="macos"),"connections":inner.connections.values().filter(|c|visible(&c.context)).collect::<Vec<_>>(),"requests":inner.pending.values().filter(|p|visible(&p.context)).collect::<Vec<_>>(),"config":http["config"],"http":http,"authorization_provider":if cfg!(target_os="macos"){ "macos_local_authentication" }else if cfg!(windows){"windows_hello_unavailable"}else{"unavailable"}}),
     )
 }
 #[tauri::command]
@@ -777,7 +762,59 @@ pub async fn desktop_tool_call(
     }
     call(&app, "desktop-ui", &name, arguments).await
 }
+pub(crate) fn connect(app: &tauri::AppHandle, connection: &str, client: &Value) -> Result<(), String> {
+    let ctx = context(app)?;
+    current(app, &ctx)?;
+    if client.to_string().len() > 512 {
+        return Err("Client metadata too large".into());
+    }
+    let state = app.state::<Service>();
+    let mut inner = state.inner.lock().map_err(|_| "MCP unavailable")?;
+    if !inner.enabled {
+        return Err("Enable local MCP in i7y desktop".into());
+    }
+    if inner.connections.contains_key(connection) {
+        return Err("Connection already initialized".into());
+    }
+    if inner.connections.len() >= 128 || inner.pending.len() >= 1000 {
+        return Err("Too many MCP connections or pending requests".into());
+    }
+    inner.connections.insert(connection.into(), Connection {
+        id: connection.into(), client: client.clone(), context: ctx,
+        authorized: false, authorization_expires_at: 0,
+    });
+    Ok(())
+}
+pub(crate) fn connection_valid(app: &tauri::AppHandle, connection: &str) -> bool {
+    context(app).and_then(|ctx| {
+        current(app, &ctx)?;
+        let state = app.state::<Service>();
+        let inner = state.inner.lock().map_err(|_| "MCP unavailable")?;
+        if !inner.enabled { return Err("MCP disabled".into()); }
+        inner.check_connection(connection, &ctx, false, now())
+    }).is_ok()
+}
 pub fn start(app: tauri::AppHandle) {
+    if let Ok(config) = app.path().app_config_dir() {
+        if std::fs::read_to_string(config.join(settings_name())).ok().as_deref() == Some("yes")
+            && cfg!(target_os = "macos") {
+            app.state::<Service>().inner.lock().unwrap().enabled = true;
+        }
+    }
+    crate::mcp_http::start(app.clone());
+    let monitor = app.clone();
+    std::thread::spawn(move || loop {
+        if crate::platform::locked() {
+            let state = monitor.state::<Service>();
+            if let Ok(mut inner) = state.inner.lock() {
+                if !inner.connections.is_empty() {
+                    inner.invalidate();
+                }
+            };
+        }
+        crate::approvals::synchronize(&monitor);
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    });
     #[cfg(unix)]
     std::thread::spawn(move || {
         use std::{
@@ -817,30 +854,6 @@ pub fn start(app: tauri::AppHandle) {
         if std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).is_err() {
             return;
         }
-        let state = app.state::<Service>();
-        if let Ok(config) = app.path().app_config_dir() {
-            if std::fs::read_to_string(config.join(settings_name()))
-                .ok()
-                .as_deref()
-                == Some("yes")
-                && cfg!(target_os = "macos")
-            {
-                state.inner.lock().unwrap().enabled = true;
-            }
-        }
-        let monitor = app.clone();
-        std::thread::spawn(move || loop {
-            if crate::platform::locked() {
-                let state = monitor.state::<Service>();
-                if let Ok(mut inner) = state.inner.lock() {
-                    if !inner.connections.is_empty() {
-                        inner.invalidate();
-                    }
-                };
-            }
-            crate::approvals::synchronize(&monitor);
-            std::thread::sleep(std::time::Duration::from_millis(500));
-        });
         let workers = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
@@ -903,29 +916,7 @@ pub fn start(app: tauri::AppHandle) {
                         let msg: Value =
                             serde_json::from_str(&line).map_err(|_| "Invalid local request")?;
                         if msg["method"] == "connect" {
-                            let ctx = context(&app)?;
-                            current(&app, &ctx)?;
-                            let client = &msg["client"];
-                            if client.to_string().len() > 512 {
-                                return Err("Client metadata too large".into());
-                            }
-                            let mut inner = state.inner.lock().map_err(|_| "MCP unavailable")?;
-                            if inner.connections.contains_key(&connection) {
-                                return Err("Connection already initialized".into());
-                            }
-                            if inner.pending.len() >= 1000 {
-                                return Err("Too many pending requests".into());
-                            }
-                            inner.connections.insert(
-                                connection.clone(),
-                                Connection {
-                                    id: connection.clone(),
-                                    client: client.clone(),
-                                    context: ctx.clone(),
-                                    authorized: false,
-                                    authorization_expires_at: 0,
-                                },
-                            );
+                            connect(&app, &connection, &msg["client"])?;
                             Ok(json!({"state":"connected"}))
                         } else if msg["method"] == "call" {
                             tauri::async_runtime::block_on(call(
@@ -1000,8 +991,15 @@ mod tests {
             record: json!({"id":"user","collectionName":"users"}),
         });
         inner.organization = "org".into();
+        inner.backend = "https://example.test/".into();
         let ctx = inner.context("https://example.test/".into()).unwrap();
         (inner, ctx)
+    }
+    #[test]
+    fn selected_backend_binding_rejects_the_same_user_on_another_origin() {
+        let (inner, ctx) = prepared();
+        assert!(inner.context("https://other.test/".into()).is_err());
+        assert_eq!(inner.context(ctx.backend.clone()).unwrap(), ctx);
     }
     fn connect(inner: &mut Inner, id: &str, ctx: &Context, authorized: bool) {
         inner.connections.insert(id.into(), Connection { id: id.into(), client: json!({}), context: ctx.clone(), authorized, authorization_expires_at: if authorized { now()+300 } else { 0 } });

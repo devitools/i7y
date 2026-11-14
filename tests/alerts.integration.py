@@ -94,14 +94,14 @@ with concurrent.futures.ThreadPoolExecutor() as pool:
 assert sorted(code for code, _ in claims) == [200, 409], claims
 claimed = next(result for code, result in claims if code == 200)
 owner_session = session if claimed['assignee'] == editor['id'] else other_session
-assert notices(reader_session, org)['items'] == []
+assert [item['kind'] for item in notices(reader_session, org)['items']] == ['claimed']
 extended = ok(prefix + '/incidents/' + incident['id'] + '/claim', 'POST', {'version': claimed['version'], 'claim_until': iso(7200)}, owner_session, org)
 assert not any(row['id'] == incident['id'] for row in ok(prefix + '/incidents?overdue=true', token=session, org=org)['items'])
 patch('incidents', incident['id'], {'claim_until': iso(-60)})
 assert any(row['id'] == incident['id'] for row in ok(prefix + '/incidents?overdue=true', token=session, org=org)['items'])
 resolved = ok(prefix + '/incidents/' + incident['id'] + '/resolve', 'POST', {'version': extended['version']}, session, org)
 assert resolved['status'] == 'resolved'
-assert notices(reader_session, org)['items'] == []
+assert [item['kind'] for item in notices(reader_session, org)['items']] == ['resolved']
 snapshot(agent, server)
 reopened = incidents(session, org)[0]
 assert reopened['id'] != incident['id']
@@ -115,7 +115,7 @@ second_agent = ok('/api/i7y/agents', 'POST', {'server': second['id']}, session, 
 snapshot(second_agent, second)
 dynamic = next(row for row in incidents(session, org) if row['resource_id'] == second['id'])
 disabled = ok(prefix + '/rules/' + key, 'PUT', {**rule_body, 'enabled': False}, session, org)
-assert notices(session, org)['items'] == []
+assert not any(item['kind'] in ['opening', 'reminder'] for item in notices(session, org)['items'])
 assert ok(prefix + '/incidents/' + dynamic['id'], token=session, org=org)['status'] == 'open'
 ok(prefix + '/rules/' + key, 'PUT', rule_body, session, org)
 snapshot(second_agent, second, disk=50)

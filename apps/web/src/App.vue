@@ -16,6 +16,8 @@ import ApiTokensPage from './components/ApiTokensPage.vue'
 import OrganizationsPage from './components/OrganizationsPage.vue'
 import InvitationPage from './components/InvitationPage.vue'
 import BulkDeletePage from './components/BulkDeletePage.vue'
+import ConnectionsManager from './components/ConnectionsManager.vue'
+import ConnectionOrganizationSelector from './components/ConnectionOrganizationSelector.vue'
 import DesktopMcpIndicator from './components/DesktopMcpIndicator.vue'
 import DesktopMcpPage from './components/DesktopMcpPage.vue'
 import ControllerSettingsPage from './components/ControllerSettingsPage.vue'
@@ -39,7 +41,7 @@ import { useQuasar } from 'quasar'
 import { restoreSession, createSessionCompletion } from './session-lifecycle'
 import { protectedRoute } from './auth-routing.ts'
 import { readRoute, routeHash, managementHash, bulkDeleteHash } from './routes'
-import { inventoryPage, inventoryScope, inventoryProjectOptions, inventoryServerStats, inventoryOperatingSystems, invalidateInventory, management, authStore, activeOrganization, organizationChoices, globalAdmin, loadOrganizations, setOrganization } from './api'
+import { inventoryPage, inventoryScope, inventoryProjectOptions, inventoryServerStats, inventoryOperatingSystems, invalidateInventory, management, authStore, activeOrganization, organizationChoices, globalAdmin, loadOrganizations, setOrganization, selectConnection, activeConnectionId, connectedSources, connectionRevision } from './api'
 import { containerStatusOptions } from './container-status.ts'
 import { matches, hasInventory } from './inventory'
 const q = useQuasar()
@@ -53,6 +55,7 @@ let sidebarRequest = 0
 let filterTimer = null
 let returnTo = '#/workspaces'
 let applyingRoute = false
+const inboxAccess=computed(()=>{connectionRevision.value;return connectedSources().length>0})
 const canEdit = computed(() => !!activeOrganization.value && authStore.isValid && (globalAdmin.value || ['admin','editor'].includes(organizationChoices.value.find(r=>r.id===activeOrganization.value)?.role)))
 async function changeOrganization(id, target = '#/workspaces') {
   clearPrivateState()
@@ -61,6 +64,21 @@ async function changeOrganization(id, target = '#/workspaces') {
   window.history.replaceState(null,'',target)
   applyRoute()
   await loadWorkspaces()
+}
+let organizationSelectionGeneration=0
+async function changeConnectionOrganization(connection,organization,target='#/workspaces') {
+  const generation=++organizationSelectionGeneration
+  clearPrivateState()
+  if(desktopRuntime && connection!==activeConnectionId.value)await selectConnection(connection)
+  if(generation!==organizationSelectionGeneration)return
+  await changeOrganization(organization,target)
+}
+async function connectionSelected() {
+  clearPrivateState()
+  session.value=authStore.isValid?authStore.record:null
+  if(session.value)await initializeOrganizations()
+  window.history.replaceState(null,'',session.value?'#/workspaces':'#/login')
+  applyRoute();if(session.value)await loadWorkspaces()
 }
 const managementView = computed(() => ['manage','login','bulkDelete'].includes(view.value))
 const containerView=computed(()=>['containers','images'].includes(view.value))
@@ -298,7 +316,7 @@ watch(drawer,value=>{detailRequest++;if(value){detailProjects.value=[];detailCon
 watch(detailPage,()=>loadDetails())
 watch(detailSearch,()=>{detailPage.value=1;loadDetails()})
 function applyRoute() {
-  const guarded = protectedRoute(window.location.hash,!!session.value)
+  const guarded = protectedRoute(window.location.hash,!!session.value || inboxAccess.value && readRoute(window.location.hash).view==='incidents')
   if (guarded.returnTo) returnTo=guarded.returnTo
   if (window.location.hash !== guarded.hash) window.history.replaceState(null,'',guarded.hash)
   clearTimeout(filterTimer)
@@ -427,38 +445,39 @@ onUnmounted(() => { window.removeEventListener('hashchange', applyRoute); stopAu
 
 <template>
   <IncidentNotifications :authenticated="!!session" :organization="activeOrganization" v-slot="notices">
-  <q-layout v-if="!authReady || !session || view==='login' || view==='invite'" view="lHh Lpr lFf">
-    <q-header bordered :class="dark ? 'bg-dark text-white' : 'bg-white text-grey-9'"><q-toolbar><q-icon name="hub" color="primary" size="28px" class="q-mr-sm"/><q-toolbar-title class="text-weight-bold">i7y</q-toolbar-title><IncidentNotificationIndicator v-bind="notices" /><q-select v-model="locale" :options="languageOptions" emit-value map-options dense borderless :aria-label="t('Language')" style="width:64px" class="q-mr-sm" /><q-btn flat round dense :icon="dark ? 'light_mode' : 'dark_mode'" :aria-label="t('Toggle theme')" @click="dark=!dark" /></q-toolbar></q-header>
+  <q-layout v-if="!authReady || (!session && !(inboxAccess && view==='incidents')) || view==='login' || view==='invite'" view="lHh Lpr lFf">
+    <q-header bordered :class="dark ? 'bg-dark text-white' : 'bg-white text-grey-9'"><q-toolbar><q-icon name="hub" color="primary" size="28px" class="q-mr-sm"/><q-toolbar-title class="text-weight-bold">i7y</q-toolbar-title><IncidentNotificationIndicator v-bind="notices" /><ConnectionsManager v-if="desktopRuntime" @selected="connectionSelected"/><q-select v-model="locale" :options="languageOptions" emit-value map-options dense borderless :aria-label="t('Language')" style="width:64px" class="q-mr-sm" /><q-btn flat round dense :icon="dark ? 'light_mode' : 'dark_mode'" :aria-label="t('Toggle theme')" @click="dark=!dark" /></q-toolbar></q-header>
     <q-page-container><q-page v-if="!authReady" class="flex flex-center"><q-spinner color="primary" size="36px" :aria-label="t('Loading')" /></q-page><InvitationPage v-else-if="view==='invite'" :key="currentRoute.token" :token="currentRoute.token" @accepted="signedIn" /><ManagementPage v-else :route="{view:'login'}" :can-edit="false" :authenticated="false" @signed-in="signedIn" /></q-page-container>
   </q-layout>
   <q-layout v-else-if="view==='mobileAuthorize'" view="lHh Lpr lFf"><q-header bordered :class="dark ? 'bg-dark text-white' : 'bg-white text-grey-9'"><q-toolbar><q-toolbar-title>i7y</q-toolbar-title><IncidentNotificationIndicator v-bind="notices" /></q-toolbar></q-header><q-page-container><MobileAuthorizationPage /></q-page-container></q-layout>
   <q-layout v-else-if="view==='desktopAuthorize'" view="lHh Lpr lFf"><q-header bordered :class="dark ? 'bg-dark text-white' : 'bg-white text-grey-9'"><q-toolbar><q-toolbar-title>i7y</q-toolbar-title><IncidentNotificationIndicator v-bind="notices" /></q-toolbar></q-header><q-page-container><DesktopAuthorizationPage /></q-page-container></q-layout>
   <MainLayout v-else :nav="nav" :active-view="activeNavigation" :active-workspace="account" :workspaces="visibleWorkspaces" :more-workspaces="accounts.length<sidebarTotal" @more-workspaces="loadWorkspaces(false,true)" :loading="loading" :error="error" v-model:only-with-servers="onlyWithServers" @navigate="navigate" @workspace="chooseAccount">
       <template #organization>
-        <q-select :model-value="activeOrganization" @update:model-value="changeOrganization" :options="organizationChoices.map(r=>({label:r.name,value:r.id}))" emit-value map-options outlined dense :dark="dark" :label="t('Organization')" />
+        <ConnectionOrganizationSelector @select="changeConnectionOrganization"/>
       </template>
       <template #session>
+        <ConnectionsManager v-if="desktopRuntime" @selected="connectionSelected"/>
         <DesktopMcpIndicator />
         <IncidentNotificationIndicator v-bind="notices" />
-        <q-btn flat no-caps icon="account_circle" :label="q.screen.lt.sm?undefined:session.email" class="session-button" :aria-label="t('Session options')" aria-haspopup="menu">
+        <q-btn flat no-caps icon="account_circle" :label="q.screen.lt.sm?undefined:session?.email" class="session-button" :aria-label="t('Session options')" aria-haspopup="menu">
           <q-menu anchor="bottom right" self="top right" auto-close>
-            <q-list class="session-menu" role="menu"><q-item v-if="desktopRuntime" clickable href="#/desktop/mcp" role="menuitem"><q-item-section avatar><q-icon name="hub" /></q-item-section><q-item-section>{{t('Desktop integrations')}}</q-item-section></q-item><q-item v-if="desktopRuntime" clickable href="#/desktop/controller" role="menuitem"><q-item-section avatar><q-icon name="terminal" /></q-item-section><q-item-section>{{t('Automation host')}}</q-item-section></q-item><q-item-label header>{{session.email}}</q-item-label><q-item clickable href="#/tokens" role="menuitem"><q-item-section avatar><q-icon name="key" /></q-item-section><q-item-section>{{t('API tokens')}}</q-item-section></q-item><q-separator /><q-item clickable role="menuitem" @click="signOut"><q-item-section avatar><q-icon name="power_settings_new" /></q-item-section><q-item-section>{{t('Sign out')}}</q-item-section></q-item></q-list>
+            <q-list class="session-menu" role="menu"><q-item v-if="desktopRuntime" clickable href="#/desktop/mcp" role="menuitem"><q-item-section avatar><q-icon name="hub" /></q-item-section><q-item-section>{{t('Desktop integrations')}}</q-item-section></q-item><q-item v-if="desktopRuntime" clickable href="#/desktop/controller" role="menuitem"><q-item-section avatar><q-icon name="terminal" /></q-item-section><q-item-section>{{t('Automation host')}}</q-item-section></q-item><q-item-label header>{{session?.email}}</q-item-label><q-item clickable href="#/tokens" role="menuitem"><q-item-section avatar><q-icon name="key" /></q-item-section><q-item-section>{{t('API tokens')}}</q-item-section></q-item><q-separator /><q-item clickable role="menuitem" @click="signOut"><q-item-section avatar><q-icon name="power_settings_new" /></q-item-section><q-item-section>{{t('Sign out')}}</q-item-section></q-item></q-list>
           </q-menu>
         </q-btn>
       </template>
-      <q-page v-if="organizationError" class="q-pa-md"><q-banner class="bg-red-1 text-negative" role="alert">{{organizationError}}<template #action><q-btn flat no-caps :label="t('Try again')" :loading="organizationLoading" @click="retryOrganizations"/></template></q-banner></q-page>
+      <q-page v-if="organizationError && view!=='incidents'" class="q-pa-md"><q-banner class="bg-red-1 text-negative" role="alert">{{organizationError}}<template #action><q-btn flat no-caps :label="t('Try again')" :loading="organizationLoading" @click="retryOrganizations"/></template></q-banner></q-page>
       <DesktopMcpPage v-else-if="view==='desktopMcp'" />
       <ProjectCopyPage v-else-if="view==='projectCopy'" :project-id="currentRoute.id || ''" :return-to="currentRoute.returnTo" />
       <ControllerSettingsPage v-else-if="view==='controllerSettings'" />
-      <ServerPingPage v-else-if="view==='serverPing'" :key="`${activeOrganization}:${currentRoute.server}`" :server-id="currentRoute.server || ''" :return-to="currentRoute.returnTo" />
-      <OrganizationsPage v-else-if="view==='organizations' || !activeOrganization" :key="activeOrganization || 'none'" :route="currentRoute" @select="(id,path)=>changeOrganization(id,path)" @changed="clearPrivateState();loadWorkspaces(true)" />
-      <AlertsPage v-else-if="view==='alerts'" :key="`${activeOrganization}:alerts`" :route="currentRoute" :can-edit="canEdit" />
-      <IncidentsPage v-else-if="view==='incidents'" :key="`${activeOrganization}:incidents`" :route="currentRoute" :can-edit="canEdit" />
+      <ServerPingPage v-else-if="view==='serverPing'" :key="`${activeConnectionId}:${activeOrganization}:${currentRoute.server}`" :server-id="currentRoute.server || ''" :return-to="currentRoute.returnTo" />
+      <IncidentsPage v-else-if="view==='incidents'" key="incidents" :route="currentRoute" :can-edit="canEdit" @navigate-source="changeConnectionOrganization"/>
+      <OrganizationsPage v-else-if="view==='organizations' || !activeOrganization" :key="activeConnectionId+':'+(activeOrganization || 'none')" :route="currentRoute" @select="(id,path)=>changeOrganization(id,path)" @changed="clearPrivateState();loadWorkspaces(true)" />
+      <AlertsPage v-else-if="view==='alerts'" :key="`${activeConnectionId}:${activeOrganization}:alerts`" :route="currentRoute" :can-edit="canEdit" />
       <BulkDeletePage v-else-if="view==='bulkDelete'" :route="currentRoute" :can-edit="canEdit" @back="backFromManagement" @saved="saved"/>
       <ManagementPage v-else-if="managementView" :key="[currentRoute.view,currentRoute.resource,currentRoute.action,currentRoute.id,currentRoute.parent].join(':')" :route="currentRoute" :can-edit="canEdit" :authenticated="!!session" @back="backFromManagement" @saved="saved" @signed-in="signedIn" />
-      <AgentInstallPage v-else-if="view==='agentInstall'" :key="`${activeOrganization}:${currentRoute.server}`" :server-id="currentRoute.server" />
-      <TelemetryPage :can-edit="canEdit" v-else-if="view==='telemetry'" :key="`${activeOrganization}:${currentRoute.server}`" :initial-server="currentRoute.server" />
-      <ApiTokensPage :key="activeOrganization" v-else-if="view==='tokens'" :route="currentRoute" :authenticated="!!session" />
+      <AgentInstallPage v-else-if="view==='agentInstall'" :key="`${activeConnectionId}:${activeOrganization}:${currentRoute.server}`" :server-id="currentRoute.server" />
+      <TelemetryPage :can-edit="canEdit" v-else-if="view==='telemetry'" :key="`${activeConnectionId}:${activeOrganization}:${currentRoute.server}`" :initial-server="currentRoute.server" />
+      <ApiTokensPage :key="activeConnectionId+':'+activeOrganization" v-else-if="view==='tokens'" :route="currentRoute" :authenticated="!!session" />
       <q-page v-else class="q-pa-md inventory-page" :class="{'compact-inventory':compactInventory,'inventory-filters-open':compactInventory && mobileFiltersOpen}">
         <PageHeader :title="pageTitle" :breadcrumbs="inventoryBreadcrumbs" />
 

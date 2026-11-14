@@ -17,7 +17,9 @@ export function actionSummary(request:any):{label:string;value:string}[]{
       break
     case 'save_alert_rule':
       add('Name',args.rule?.name || args.key)
-      add('Target',args.rule?.scope_id)
+      add('Target',args.rule?.model_version===2?args.rule?.target_type:args.rule?.scope_id)
+      if(args.rule?.reminder_intervals)for(const [severity,seconds] of Object.entries(args.rule.reminder_intervals))add('Reminder '+severity+' (seconds)',String(seconds))
+      if(args.rule?.exclusions)add('Exclusions',String(args.rule.exclusions.length))
       if(args.rule?.condition){
         const c=args.rule.condition
         add('Condition',[c.metric,c.operator,c.value ?? c.state].filter(v=>v!==undefined).join(' '))
@@ -28,6 +30,11 @@ export function actionSummary(request:any):{label:string;value:string}[]{
         }
       }
       if(args.rule?.duration_seconds!==undefined)add(['host.cpu_percent','host.memory_percent'].includes(args.rule.condition?.metric)&&args.rule.condition.critical_value!==undefined?'Confirmation per severity (seconds)':'Duration (seconds)',String(args.rule.duration_seconds))
+      break
+    case 'apply_alert_rule_migration':
+      add('Action','Consolidate alert rules by resource type')
+      add('Plan hash',args.plan_hash)
+      if(args.options?.exclusions)add('Exclusions',String(args.options.exclusions.length))
       break
     case 'archive_alert_rule':
       add('Alert rule',args.key)
@@ -46,7 +53,7 @@ export function actionSummary(request:any):{label:string;value:string}[]{
 }
 
 export function actionDetails(request:any):{labels:string[];value:string}[]{
-  const names:Record<string,string>={title:'Title',severity:'Severity',resource_type:'Resource type',resource_id:'Resource ID',resource_name:'Resource',reminder_seconds:'Reminder interval (seconds)',evidence:'Evidence',id:'Incident',version:'Version',claim_until:'Claim until',key:'Alert rule',expected_version:'Expected version',rule:'Alert rule',name:'Name',scope_type:'Scope',scope_id:'Target',condition:'Condition',metric:'Metric',operator:'Operator',value:request.arguments?.rule?.condition?.critical_value!==undefined?'Warning threshold (%)':'Value',critical_value:'Critical threshold (%)',disk_path:'Disk path',state:'State',duration_seconds:['host.cpu_percent','host.memory_percent'].includes(request.arguments?.rule?.condition?.metric)&&request.arguments.rule.condition.critical_value!==undefined?'Confirmation per severity (seconds)':'Duration (seconds)',enabled:'Enabled',operation_id:'Operation'}
+  const names:Record<string,string>={model_version:'Rule model version',target_type:'Resource type',reminder_intervals:'Reminders by severity (seconds)',exclusions:'Exclusions',reason:'Reason',plan_hash:'Reviewed plan hash',options:'Migration options',reminder_overrides:'Reminder overrides',no_communication_seconds:'No communication threshold (seconds)',title:'Title',severity:'Severity',resource_type:'Resource type',resource_id:'Resource ID',resource_name:'Resource',reminder_seconds:'Reminder interval (seconds)',evidence:'Evidence',id:'Incident',version:'Version',claim_until:'Claim until',key:'Alert rule',expected_version:'Expected version',rule:'Alert rule',name:'Name',scope_type:'Scope',scope_id:'Target',condition:'Condition',metric:'Metric',operator:'Operator',value:request.arguments?.rule?.condition?.critical_value!==undefined?'Warning threshold (%)':'Value',critical_value:'Critical threshold (%)',disk_path:'Disk path',state:'State',duration_seconds:['host.cpu_percent','host.memory_percent'].includes(request.arguments?.rule?.condition?.metric)&&request.arguments.rule.condition.critical_value!==undefined?'Confirmation per severity (seconds)':'Duration (seconds)',enabled:'Enabled',operation_id:'Operation'}
   const rows:{labels:string[];value:string}[]=[]
   function visit(value:unknown,labels:string[],depth:number){
     if(value!==null&&typeof value==='object'&&depth<6){

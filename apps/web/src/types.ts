@@ -13,6 +13,7 @@ export interface ListState {
   statuses?: string[]
 }
 export interface RouteState extends ListState {
+  connection?: string
   organization?: string
   key?: string
   view?: string

@@ -6,6 +6,7 @@ use url::Url;
 pub struct Backend {
     pub url: Mutex<Option<Url>>,
     pub client: reqwest::Client,
+    pub connections: Mutex<crate::connections::Registry>,
 }
 
 pub fn normalize_backend(input: &str) -> Result<Url, String> {
@@ -61,40 +62,11 @@ pub fn get_backend(state: tauri::State<'_, Backend>) -> Result<Option<String>, S
 #[tauri::command]
 pub async fn set_backend(
     app: tauri::AppHandle,
-    state: tauri::State<'_, Backend>,
     backend_url: String,
 ) -> Result<String, String> {
-    let url = normalize_backend(&backend_url)?;
-    let response = state
-        .client
-        .get(
-            url.join("api/i7y/desktop")
-                .map_err(|_| "Invalid backend URL")?,
-        )
-        .timeout(Duration::from_secs(10))
-        .send()
-        .await
-        .map_err(|_| "Unable to connect to the backend")?;
-    if !response.status().is_success() || response.content_length().unwrap_or(0) > 65536 {
-        return Err("Browser sign-in is not available on this server yet".into());
-    }
-    let data = response
-        .json::<HashMap<String, bool>>()
-        .await
-        .map_err(|_| "This address is not an i7y backend")?;
-    if data.get("browser_login") != Some(&true) {
-        return Err("Browser sign-in is not available on this server yet".into());
-    }
-    crate::session::desktop_session_clear(app.clone())?;
-    let file = config_file(&app)?;
-    std::fs::create_dir_all(file.parent().ok_or("Invalid settings path")?)
-        .map_err(|_| "Unable to save backend settings")?;
-    std::fs::write(&file, url.as_str()).map_err(|_| "Unable to save backend settings")?;
-    *state
-        .url
-        .lock()
-        .map_err(|_| "Unable to save backend settings")? = Some(url.clone());
-    Ok(url.to_string())
+    let connection = crate::connections::add_connection(app.clone(), backend_url, String::new()).await?;
+    crate::connections::select_connection(app, connection.id)?;
+    Ok(connection.url.to_string())
 }
 
 #[derive(Serialize)]
@@ -206,23 +178,13 @@ fn public_api_body(
 pub async fn backend_request(
     app: tauri::AppHandle,
     state: tauri::State<'_, Backend>,
+    connection_id: String,
     url: String,
     method: String,
     headers: HashMap<String, String>,
     body: Option<String>,
 ) -> Result<ApiResponse, String> {
-    let backend = state
-        .url
-        .lock()
-        .map_err(|_| "Unable to read backend settings")?
-        .clone()
-        .ok_or("Select a backend first")?;
-    let generation = app
-        .state::<crate::mcp::Service>()
-        .inner
-        .lock()
-        .map_err(|_| "Session unavailable")?
-        .generation;
+    let (backend, generation, session) = state.connections.lock().map_err(|_| "Connections unavailable")?.snapshot(&connection_id)?;
     let target = api_target(&backend, &url)?;
     target_is_auth(&backend, &target)?;
     if !["GET", "POST", "PATCH", "PUT", "DELETE"].contains(&method.as_str()) {
@@ -238,20 +200,14 @@ pub async fn backend_request(
             "accept",
             "x-i7y-organization",
             "accept-language",
+            "x-i7y-expected-revision",
         ]
         .contains(&key.to_lowercase().as_str())
         {
             return Err("Unsupported API header".into());
         }
         if key.eq_ignore_ascii_case("authorization") {
-            let token = app
-                .state::<crate::mcp::Service>()
-                .inner
-                .lock()
-                .map_err(|_| "Session unavailable")?
-                .session
-                .as_ref()
-                .map(|s| s.token.clone());
+            let token = session.as_ref().map(|session| session.token.clone());
             if let Some(token) = token {
                 request = request.bearer_auth(token);
             } else if !value.is_empty() {
@@ -287,30 +243,12 @@ pub async fn backend_request(
         bytes.extend_from_slice(&chunk);
     }
     let body = String::from_utf8(bytes).map_err(|_| "Unsupported API response")?;
-    if state
-        .url
-        .lock()
-        .map_err(|_| "Backend unavailable")?
-        .as_ref()
-        != Some(&backend)
-    {
-        return Err("Backend changed".into());
-    }
-    if app
-        .state::<crate::mcp::Service>()
-        .inner
-        .lock()
-        .map_err(|_| "Session unavailable")?
-        .generation
-        != generation
-    {
-        return Err("Session context changed".into());
-    }
+    state.connections.lock().map_err(|_| "Connections unavailable")?.current(&connection_id, generation)?;
     let body = public_api_body(&backend, &target, status, body, |value| {
-        crate::session::store(&app, backend.as_str(), value, generation)
+        crate::session::store(&app, &connection_id, value, generation)
     })?;
     if status == 401 {
-        crate::session::desktop_session_clear(app)?;
+        crate::session::clear_if_current(&app, &connection_id, generation)?;
     }
     Ok(ApiResponse {
         status,

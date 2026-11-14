@@ -2,9 +2,11 @@
 
 mod approvals;
 mod backend;
+mod connections;
 mod controller;
 mod project_copy;
 mod mcp;
+mod mcp_http;
 mod operational;
 mod platform;
 mod session;
@@ -12,6 +14,8 @@ use tauri::Manager;
 
 #[tauri::command]
 fn open_browser_login(
+    app: tauri::AppHandle,
+    connection_id: Option<String>,
     state: tauri::State<'_, backend::Backend>,
     request: String,
     challenge: String,
@@ -25,12 +29,8 @@ fn open_browser_login(
     {
         return Err("Invalid desktop request".into());
     }
-    let mut target = state
-        .url
-        .lock()
-        .map_err(|_| "Unable to read backend settings")?
-        .clone()
-        .ok_or("Select a backend first")?;
+    let id = connections::resolve(&app, connection_id.as_deref())?;
+    let mut target = state.connections.lock().map_err(|_| "Connections unavailable")?.connection(&id)?.url.clone();
     target.set_fragment(Some(&format!(
         "/desktop-authorize?request={request}&challenge={challenge}"
     )));
@@ -56,11 +56,15 @@ fn main() {
     tauri::Builder::default()
         .setup(|app| {
             app.manage(mcp::Service::default());
+            app.manage(mcp_http::Service::default());
             app.manage(approvals::State::default());
-            let url = backend::load(app.handle());
+            let legacy = backend::load(app.handle());
+            let connections = connections::load(app.handle(), legacy.as_ref())?;
+            let url = connections.selected.as_deref().and_then(|id| connections.connection(id).ok()).map(|connection| connection.url.clone());
             app.manage(backend::Backend {
                 url: std::sync::Mutex::new(url),
                 client: backend::client()?,
+                connections: std::sync::Mutex::new(connections),
             });
             mcp::start(app.handle().clone());
             Ok(())
@@ -87,9 +91,16 @@ fn main() {
             open_browser_login,
             session::desktop_session_restore,
             session::desktop_session_clear,
+            session::desktop_connection_logout,
+            connections::get_connections,
+            connections::add_connection,
+            connections::select_connection,
+            connections::rename_connection,
+            connections::remove_connection,
             session::desktop_session_context,
             mcp::mcp_overview,
             mcp::mcp_enable,
+            mcp_http::mcp_http_configure,
             mcp::mcp_revoke,
             mcp::mcp_decide,
             mcp::desktop_tool_call,

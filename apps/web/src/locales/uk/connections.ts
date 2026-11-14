@@ -1,0 +1,21 @@
+export default {
+  "connections.title": "Підключення до серверів",
+  "connections.manage": "Керування підключеннями до серверів",
+  "connections.help": "Увійдіть до кількох інсталяцій. Центр інцидентів охоплює всі підключені інсталяції та організації.",
+  "connections.add": "Додати сервер",
+  "connections.addLogin": "Додати й увійти",
+  "connections.rename": "Перейменувати",
+  "connections.remove": "Видалити підключення",
+  "connections.select": "Вибрати цей сервер",
+  "connections.selected": "Вибрано",
+  "connections.signedOut": "Вихід виконано",
+  "connections.empty": "Немає збережених підключень.",
+  "connections.unavailable": "Сервер недоступний. Інші підключення залишаються активними.",
+  "connections.addError": "Не вдалося додати сервер. Перевірте URL і підтримку входу через браузер.",
+  "connections.loginError": "Не вдалося авторизувати підключення. Спробуйте ще раз.",
+  "connections.actionError": "Не вдалося оновити підключення. Спробуйте ще раз.",
+  "incidents.allSources": "Усі підключені сервери й організації",
+  "incidents.source": "Джерело",
+  "incidents.partialSources": "Деякі сервери недоступні. Показано доступні інциденти.",
+  "incidents.sourceUnavailable": "Джерело інциденту недоступне. Підключіть сервер знову."
+}

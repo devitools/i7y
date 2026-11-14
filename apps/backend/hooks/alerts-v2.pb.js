@@ -1,0 +1,8 @@
+routerAdd('GET','/api/i7y/alerts/v2/metrics',e=>require(__hooks+'/lib/alerts-v2-http.js').handle(e,'metrics'),$apis.requireAuth('users'))
+routerAdd('GET','/api/i7y/alerts/v2/rules',e=>require(__hooks+'/lib/alerts-v2-http.js').handle(e,'list'),$apis.requireAuth('users'))
+routerAdd('POST','/api/i7y/alerts/v2/rules/simulate',e=>require(__hooks+'/lib/alerts-v2-http.js').handle(e,'simulate'),$apis.requireAuth('users'),$apis.bodyLimit(2097152))
+routerAdd('GET','/api/i7y/alerts/v2/rules/{key}',e=>require(__hooks+'/lib/alerts-v2-http.js').handle(e,'get'),$apis.requireAuth('users'))
+routerAdd('PUT','/api/i7y/alerts/v2/rules/{key}',e=>require(__hooks+'/lib/alerts-v2-http.js').handle(e,'save'),$apis.requireAuth('users'),$apis.bodyLimit(2097152))
+routerAdd('DELETE','/api/i7y/alerts/v2/rules/{key}',e=>require(__hooks+'/lib/alerts-v2-http.js').handle(e,'archive'),$apis.requireAuth('users'))
+routerAdd('POST','/api/i7y/alerts/v2/migration/preview',e=>require(__hooks+'/lib/alerts-v2-http.js').handle(e,'migration-preview'),$apis.requireAuth('users'),$apis.bodyLimit(2097152))
+routerAdd('POST','/api/i7y/alerts/v2/migration/apply',e=>require(__hooks+'/lib/alerts-v2-http.js').handle(e,'migration-apply'),$apis.requireAuth('users'),$apis.bodyLimit(2097152))

@@ -17,7 +17,7 @@ export function readRoute(hash: string): RouteState {
   if(path==='alerts/integrations')return {view:'alerts',action:'list',section:'integrations'}
   if(parts[0]==='alerts' && parts.length===3 && parts[2]==='edit')return {view:'alerts',action:'edit',section:'rules',key:decodeURIComponent(parts[1])}
   if(path==='incidents')return {view:'incidents',action:'list'}
-  if(parts[0]==='incidents' && parts.length===2)return {view:'incidents',action:'detail',id:parts[1]}
+  if(parts[0]==='incidents' && parts.length===2){try{return {view:'incidents',action:'detail',id:decodeURIComponent(parts[1]),...(params.get('connection')?{connection:params.get('connection')}:{}),...(params.get('organization')?{organization:params.get('organization')}:{})}}catch{return {view:'incidents',action:'list'}}}
   if (parts[0] === 'servers' && parts.length === 3 && parts[2] === 'agent-installation') return {view:'agentInstall',server:decodeURIComponent(parts[1])}
   if (path === 'tokens') return {view:'tokens',action:'list'}
   if (path === 'tokens/new') return {view:'tokens',action:'new'}

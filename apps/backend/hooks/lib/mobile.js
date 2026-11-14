@@ -12,6 +12,10 @@ function configuration(env) {
   return {enabled:/^[\x21-\x7e]{32}$/.test(key) && (https || loopback),key,url}
 }
 function settings() {return configuration(name=>$os.getenv(name))}
+function gatewayUrls(config){
+  const additional=String($os.getenv('I7Y_PUSH_GATEWAY_URLS')||'').split(',').map(value=>value.trim()).filter(Boolean)
+  return [...new Set([config.url,...additional].filter(url=>configuration(name=>name==='I7Y_PUSH_GATEWAY_URL'?url:$os.getenv(name)).enabled))]
+}
 function proof(body,instance,verifier) {
   return body && (body.locale===undefined || ['en','pt-BR','uk'].includes(body.locale)) && (body.time_zone===undefined || (typeof body.time_zone==='string' && /^[A-Za-z0-9_+./-]{1,80}$/.test(body.time_zone))) && /^[a-f0-9]{64}$/.test(String(body.request)) && /^[a-f0-9]{64}$/.test(String(body[verifier?'verifier':'challenge'])) && body.instance_id===instance && (!body.audience || body.audience==='mobile')
 }
@@ -40,7 +44,7 @@ function newRecord(app,collection,values) {
 function handle(e,operation) {
   e.response.header().set('Cache-Control','no-store')
   const instance=installation(e.app),config=settings(),body=e.requestInfo().body || {}
-  if(operation==='info')return e.json(200,{instance_id:instance,protocol_version:1,capabilities:['browser_login','incidents',...(config.enabled?['push']:[])],...(config.enabled?{push_gateway_url:config.url}:{})})
+  if(operation==='info')return e.json(200,{instance_id:instance,protocol_version:1,capabilities:['browser_login','incidents','inbox',...(config.enabled?['push']:[])],...(config.enabled?{push_gateway_url:config.url,push_gateway_urls:gatewayUrls(config)}:{})})
   if(operation==='authorize'){
     if(!proof(body,instance,false))fail(400,'Invalid mobile authorization request')
     e.app.runInTransaction(app=>{

@@ -1,55 +1,41 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
-import { alertsApi } from '../alerts-api'
-import { authStore } from '../api'
+import { connectionRevision, authStore, connectedSources, refreshConnectedOrganizations } from '../api'
 import { t } from '../i18n'
 import { createDesktopIncidentSync } from '../desktop-incidents'
 import { createIncidentNoticeDisplay } from '../incident-notices'
-const props = defineProps<{authenticated:boolean, organization:string|null}>()
-const q = useQuasar(), count = ref(0), unavailable = ref(false)
-const cursors = new Map<string,string>()
-const desktopIncidents = createDesktopIncidentSync()
-const notices = createIncidentNoticeDisplay({show:(notice,presentation,onDismiss)=>{
-  const key=context()
-  return q.notify({message:notice.title,caption:t(presentation.caption),icon:presentation.icon,iconColor:presentation.color,classes:'incident-toast',multiLine:true,group:false,timeout:7000,position:'top-right',actions:[{label:t(notice.kind==='summary'?'incidents.title':'incidents.view'),noCaps:true,handler:()=>{if(key===context())window.location.hash=notice.incident_id?'#/incidents/'+encodeURIComponent(notice.incident_id):'#/incidents'}}],onDismiss})
-}})
-let generation = 0, running = false, timer: ReturnType<typeof setInterval>, identity = ''
-const label = computed(() => t(unavailable.value?'incidents.notificationsUnavailable':'incidents.notifications') + (count.value ? ': '+count.value : ''))
-function context() {return props.authenticated && props.organization && authStore.isValid ? authStore.record?.id+':'+props.organization : ''}
-function reset() {
-  generation++;running=false;count.value=0;unavailable.value=false
-  notices.reset()
-  const user=authStore.record?.id || ''
-  if (identity!==user || !props.authenticated) {cursors.clear();identity=user}
-  desktopIncidents.setContext(context())
-  poll()
-}
+import { createIncidentNotificationInbox, incidentHref, sourceFingerprint } from '../incident-inbox'
+import { incidentSources } from '../incident-sources'
+defineProps<{authenticated:boolean, organization:string|null}>()
+const q=useQuasar(),count=ref(0),unavailable=ref(false)
+const inbox=createIncidentNotificationInbox(),desktopIncidents=createDesktopIncidentSync()
+const sources=computed(()=>{connectionRevision.value;return incidentSources()})
+const visible=computed(()=>sources.value.length>0)
+const label=computed(()=>t(unavailable.value?'incidents.notificationsUnavailable':'incidents.notifications')+(count.value?': '+count.value:''))
+const notices=createIncidentNoticeDisplay({show:(notice:any,presentation,onDismiss)=>q.notify({message:notice.title,caption:[notice.connection_name,notice.organization_name,t(presentation.caption)].filter(Boolean).join(' · '),icon:presentation.icon,iconColor:presentation.color,classes:'incident-toast',multiLine:true,group:false,timeout:7000,position:'top-right',actions:[{label:t(notice.kind==='summary'?'incidents.title':'incidents.view'),noCaps:true,handler:()=>{if(notice.kind==='summary')window.location.hash='#/incidents';else if(connectedSources().some(source=>source.id===notice.connection_id && source.generation===notice.source_generation))window.location.hash=incidentHref({...notice,incident_id:notice.original_incident_id})}}],onDismiss})})
+let generation=0,running=false,timer:ReturnType<typeof setInterval>,sequence=0,organizationPoll=0
+const nativeContext='incident-center'
+desktopIncidents.setContext(nativeContext)
 async function poll() {
-  const key=context(),version=generation
-  if(!key || running)return
+  if(running)return
+  const version=generation,snapshot=sources.value
   running=true
   try {
-    const result=await alertsApi.notifications(cursors.get(key)||'0')
-    if(version!==generation || key!==context())return
-    unavailable.value=false;count.value=result.open_count
-    desktopIncidents.update(key,result)
-    const initial=!cursors.has(key)
-    const fresh=[]
-    let cursor=cursors.get(key)||'0'
-    for (const notice of result.items || []) {
-      if(BigInt(notice.sequence)<=BigInt(cursor))continue
-      fresh.push(notice)
-      cursor=String(notice.sequence)
-    }
-    notices.presentBatch(fresh,initial,result.open_count,t('incidents.startupSummary').replace('{count}',String(result.open_count)))
-    cursors.set(key,String(result.cursor || cursor))
+    const result=await inbox.poll(snapshot,{deferCommit:true})
+    if(version!==generation)return
+    result.commit()
+    count.value=result.open_count;unavailable.value=result.failures.length>0
+    if(result.initialCount)notices.presentBatch([],true,result.initialCount,t('incidents.startupSummary').replace('{count}',String(result.open_count)))
+    const items=result.items.map(notice=>({...notice,original_incident_id:notice.incident_id,incident_id:notice.notice_key,sequence:++sequence}))
+    notices.presentBatch(items,false,result.open_count,'')
+    desktopIncidents.update(nativeContext,{open_count:result.open_count,cursor:String(sequence),items})
   } catch {if(version===generation)unavailable.value=true}
   finally {if(version===generation)running=false}
 }
-watch(()=>[props.authenticated,props.organization],reset,{immediate:true})
-const unsubscribe=authStore.onChange(()=>reset())
-onMounted(()=>{timer=setInterval(poll,10000)})
+watch(()=>sourceFingerprint(sources.value),()=>{generation++;running=false;notices.clear();if(!sources.value.length){inbox.reset();count.value=0;unavailable.value=false;desktopIncidents.update(nativeContext,{open_count:0,cursor:String(sequence),items:[]})}void poll()},{immediate:true})
+const unsubscribe=authStore.onChange(()=>{void poll()})
+onMounted(()=>{timer=setInterval(()=>{void poll();if(++organizationPoll%6===0)void refreshConnectedOrganizations().catch(()=>{})},10000)})
 onUnmounted(()=>{generation++;clearInterval(timer);unsubscribe();desktopIncidents.dispose();notices.clear()})
 </script>
-<template><slot :visible="!!authenticated && !!organization" :count="count" :unavailable="unavailable" :label="label" /></template>
+<template><slot :visible="visible" :count="count" :unavailable="unavailable" :label="label" /></template>

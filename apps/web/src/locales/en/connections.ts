@@ -1,0 +1,21 @@
+export default {
+  "connections.title": "Backend connections",
+  "connections.manage": "Manage backend connections",
+  "connections.help": "Sign in to several installations. The incident center includes every connected installation and organization.",
+  "connections.add": "Add backend",
+  "connections.addLogin": "Add and sign in",
+  "connections.rename": "Rename",
+  "connections.remove": "Remove connection",
+  "connections.select": "Use this backend",
+  "connections.selected": "Selected",
+  "connections.signedOut": "Signed out",
+  "connections.empty": "No saved connections.",
+  "connections.unavailable": "Backend unavailable. Other connections remain active.",
+  "connections.addError": "Unable to add this backend. Check its URL and browser sign-in support.",
+  "connections.loginError": "Unable to authorize this connection. Try again.",
+  "connections.actionError": "Unable to update this connection. Try again.",
+  "incidents.allSources": "All connected backends and organizations",
+  "incidents.source": "Source",
+  "incidents.partialSources": "Some backends are unavailable. Available incidents are shown.",
+  "incidents.sourceUnavailable": "This incident source is unavailable. Reconnect its backend to continue."
+}

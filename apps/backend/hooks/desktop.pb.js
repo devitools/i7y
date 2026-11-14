@@ -36,5 +36,6 @@ cronAdd('desktop_authorization_cleanup','*/15 * * * *',()=>{
 
 routerAdd('GET','/api/i7y/desktop',e=>{
   e.response.header().set('Cache-Control','no-store')
-  return e.json(200,{browser_login:true})
+  const instance=e.app.findFirstRecordByFilter('mobile_installation','key="installation"').getString('instance_id')
+  return e.json(200,{browser_login:true,instance_id:instance,capabilities:['inbox']})
 })

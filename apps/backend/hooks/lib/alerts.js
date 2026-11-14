@@ -60,12 +60,14 @@ function normalizeRule(body) {
   const value = condition.value === undefined && metric.id === 'server.no_communication_seconds' ? 900 : condition.value
   if (metric.values ? !metric.values.includes(value) : typeof value !== 'number' || !Number.isFinite(value) || value < 0) throw new Error('Invalid condition value')
   if (metric.id === 'server.no_communication_seconds' && value < 1) throw new Error('Invalid communication threshold')
-  const scope = body.scope_type
-  if (!['workspace', 'server', 'container'].includes(scope) || (scope === 'container' && metric.target_type !== 'container')) throw new Error('Invalid scope')
+  const modern = body.model_version === 2
+  const scope = modern ? 'organization' : body.scope_type
+  if (!modern && (!['workspace', 'server', 'container'].includes(scope) || (scope === 'container' && metric.target_type !== 'container'))) throw new Error('Invalid scope')
+  if (modern && (!['server','container'].includes(body.target_type) || body.scope_type !== undefined || body.scope_id !== undefined)) throw new Error('Type rules require only target_type')
   if (body.target_type !== undefined && body.target_type !== metric.target_type) throw new Error('Metric does not match target type')
   const normalized = {
     name: text(body.name, 'name', 240, true), severity: body.severity === undefined ? 'warning' : body.severity,
-    scope_type: scope, scope_id: text(body.scope_id, 'scope', 100, true), target_type: metric.target_type,
+    scope_type: scope, scope_id: modern ? '' : text(body.scope_id, 'scope', 100, true), target_type: metric.target_type,
     condition: { metric: metric.id, operator, value }, duration_seconds: bounded(body.duration_seconds, 0, 0, 604800, 'duration'),
     reminder_seconds: bounded(body.reminder_seconds, 900, 60, 604800, 'reminder interval'),
     enabled: body.enabled === undefined ? true : body.enabled
@@ -76,7 +78,63 @@ function normalizeRule(body) {
     normalized.condition.critical_value = condition.critical_value
   }
   if (metric.id === 'host.disk_percent') normalized.condition.disk_path = condition.disk_path === undefined ? '*' : text(condition.disk_path, 'disk path', 1024, true)
+  if (modern) {
+    normalized.model_version = 2
+    const intervals = body.reminder_intervals
+    if (!intervals || typeof intervals !== 'object' || Array.isArray(intervals) || Object.keys(intervals).some(key => !['info','warning','critical'].includes(key))) throw new Error('Invalid reminder intervals')
+    normalized.reminder_intervals = {}
+    const bands = normalized.condition.critical_value === undefined ? [normalized.severity] : ['warning','critical']
+    for (const band of bands) normalized.reminder_intervals[band] = bounded(intervals[band], undefined, 60, 604800, band + ' reminder interval')
+    normalized.reminder_seconds = normalized.reminder_intervals[normalized.severity]
+    if (!Array.isArray(body.exclusions) || body.exclusions.length > 10000) throw new Error('Invalid exclusions')
+    const seen = new Set()
+    normalized.exclusions = body.exclusions.map(item => {
+      if (!item || item.resource_type !== metric.target_type) throw new Error('Invalid excluded resource type')
+      const id = text(item.resource_id, 'excluded resource', 15, true)
+      if (seen.has(id)) throw new Error('Duplicate exclusion')
+      seen.add(id)
+      return {resource_type:metric.target_type, resource_id:id, reason:text(item.reason, 'exclusion reason', 1024, true)}
+    }).sort((a,b) => a.resource_id.localeCompare(b.resource_id))
+    normalized.condition_key = canonical({target_type:metric.target_type, condition:normalized.condition, severity:normalized.severity, duration_seconds:normalized.duration_seconds})
+  }
   return normalized
+}
+function exclusions(app, rule) {
+  if (number(rule,'model_version') !== 2) return []
+  return rows(app,'alert_rule_exclusions','rule={:rule}',{rule:rule.id}).map(record => ({id:record.id, resource_type:string(record,'resource_type'),resource_id:string(record,'resource_id'),resource_name:string(record,'resource_name'),reason:string(record,'reason'),actor:string(record,'actor'),created:string(record,'created')}))
+}
+function ruleAudit(app, rule, kind, actor, data, now) {
+  return create(app,'alert_rule_events',{organization:string(rule,'organization'),rule:rule.id,kind,actor:actor || '',occurred_at:iso(now),data})
+}
+function reminderInterval(rule, severity) {
+  const configured = json(rule,'reminder_intervals')[severity]
+  return number(rule,'model_version') === 2 && Number.isInteger(configured) && configured >= 60 ? configured : number(rule,'reminder_seconds')
+}
+function setExclusions(app, rule, desired, actor, now) {
+  const previous=exclusions(app,rule), targets=inventory(app,string(rule,'organization'))
+  for (const item of desired) {
+    const target=targets.find(target=>target.resource_type===item.resource_type && target.resource_id===item.resource_id)
+    if (!target && !previous.some(before=>before.resource_type===item.resource_type && before.resource_id===item.resource_id)) throw new Error('Excluded resource does not belong to this organization')
+  }
+  for (const item of previous) if (!desired.some(next=>next.resource_id===item.resource_id)) {
+    app.delete(app.findRecordById('alert_rule_exclusions',item.id))
+    ruleAudit(app,rule,'exclusion_removed',actor,item,now)
+    const target=targets.find(target=>target.resource_type===item.resource_type && target.resource_id===item.resource_id)
+    if(target) {const state=stateFor(app,rule,target);state.set('data',{revision:number(rule,'revision'),activated_at:now});app.save(state)}
+  }
+  for (const item of desired) {
+    const before=previous.find(entry=>entry.resource_id===item.resource_id)
+    if(before && before.reason===item.reason) continue
+    const target=targets.find(target=>target.resource_type===item.resource_type && target.resource_id===item.resource_id)
+    if(before) {const record=app.findRecordById('alert_rule_exclusions',before.id);record.set('reason',item.reason);record.set('actor',actor);app.save(record)}
+    else create(app,'alert_rule_exclusions',Object.assign({},item,{organization:string(rule,'organization'),rule:rule.id,resource_name:target.resource_name,actor}))
+    ruleAudit(app,rule,before?'exclusion_changed':'exclusion_added',actor,item,now)
+    for(const incident of ruleIncidents(app,rule)) if(string(incident,'resource_type')===item.resource_type && string(incident,'resource_id')===item.resource_id) resolve(app,incident,'resource_excluded',actor,now)
+  }
+}
+function describeRule(app, rule) {
+  const excluded=exclusions(app,rule), targets=inventory(app,string(rule,'organization')).filter(target=>matches(rule,target))
+  return {model_version:number(rule,'model_version') || 1,reminder_intervals:number(rule,'model_version')===2?json(rule,'reminder_intervals'):{[string(rule,'severity')]:number(rule,'reminder_seconds'),...(json(rule,'condition').critical_value===undefined?{}:{critical:number(rule,'reminder_seconds')})},exclusions:excluded,coverage:{total:targets.length,excluded:targets.filter(target=>excluded.some(item=>item.resource_type===target.resource_type && item.resource_id===target.resource_id)).length,included:targets.filter(target=>matches(rule,target,excluded)).length}}
 }
 function inventory(app, org) {
   const workspaces = rows(app, 'workspaces').filter(record => string(record, 'organization') === org)
@@ -93,8 +151,9 @@ function inventory(app, org) {
   }
   return targets
 }
-function matches(rule, target) {
-  if (string(rule, 'target_type') !== target.resource_type) return false
+function matches(rule, target, excluded) {
+  if (string(rule, 'target_type') !== target.resource_type || (excluded || []).some(item=>item.resource_type===target.resource_type && item.resource_id===target.resource_id)) return false
+  if (number(rule,'model_version') === 2) return true
   const scope = string(rule, 'scope_type'), id = string(rule, 'scope_id')
   return scope === 'workspace' ? target.workspace_id === id : scope === 'server' ? target.server_id === id : target.container_id === id
 }
@@ -121,7 +180,7 @@ function active(app, incident) {
   const ruleId = string(incident, 'rule'), integrationId = string(incident, 'integration')
   if (ruleId) {
     const rule = app.findRecordById('alert_rules', ruleId)
-    if (!boolean(rule, 'enabled') || boolean(rule, 'archived')) return false
+    if (!boolean(rule, 'enabled') || boolean(rule, 'archived') || exclusions(app,rule).some(item=>item.resource_type===string(incident,'resource_type') && item.resource_id===string(incident,'resource_id'))) return false
   }
   if (integrationId && !boolean(app.findRecordById('alert_integrations', integrationId), 'enabled')) return false
   return true
@@ -142,7 +201,7 @@ function openIncident(app, fields, actor, now) {
 }
 function resolve(app, incident, reason, actor, now) {
   now = instant(now)
-  if (!['manual', 'recovered', 'source_closed', 'rule_changed', 'rule_archived', 'resource_removed', 'resource_transferred'].includes(reason)) throw new Error('Invalid resolution reason')
+  if (!['manual', 'recovered', 'source_closed', 'rule_changed', 'rule_archived', 'resource_removed', 'resource_transferred', 'resource_excluded'].includes(reason)) throw new Error('Invalid resolution reason')
   if (string(incident, 'status') === 'resolved') return incident
   invalidate(app, incident)
   assign(incident, { status: 'resolved', resolved_at: iso(now), resolution_reason: reason, next_reminder_at: '', schedule_generation: number(incident, 'schedule_generation') + 1, version: number(incident, 'version') + 1 })
@@ -156,26 +215,34 @@ function resetStates(app, rule) {
 }
 function saveRule(app, org, key, body, actor, now) {
   now = instant(now); key = text(key, 'key', 120, true)
-  const values = normalizeRule(body)
+  const values = normalizeRule(body), desired = values.exclusions
+  delete values.exclusions
   const rule = rows(app, 'alert_rules', 'organization={:org} && key={:key}', { org, key })[0]
-  if (!rule) return create(app, 'alert_rules', Object.assign(values, { organization: org, key, archived: false, edit_version: 1, revision: 1, activated_at: iso(now) }))
+  if (!rule) {
+    const created=create(app,'alert_rules',Object.assign(values,{organization:org,key,archived:false,edit_version:1,revision:1,activated_at:iso(now)}))
+    if(desired) setExclusions(app,created,desired,actor,now)
+    return created
+  }
+  if(number(rule,'model_version')===2 && values.model_version!==2) conflict('Update the client before editing a type rule')
   if (boolean(rule, 'archived')) conflict('Archived rule key cannot be reused')
   const changed = ['scope_type', 'scope_id', 'target_type'].some(field => string(rule, field) !== values[field]) || canonical(json(rule, 'condition')) !== canonical(values.condition) || number(rule, 'duration_seconds') !== values.duration_seconds
-  const enabled = boolean(rule, 'enabled'), cadenceChanged = number(rule, 'reminder_seconds') !== values.reminder_seconds
+  const enabled = boolean(rule, 'enabled'), cadenceChanged = number(rule, 'reminder_seconds') !== values.reminder_seconds || canonical(json(rule,'reminder_intervals')) !== canonical(values.reminder_intervals || {})
   assign(rule, values)
   rule.set('edit_version', number(rule, 'edit_version') + 1)
   if (changed) rule.set('revision', number(rule, 'revision') + 1)
   if (changed || (!enabled && values.enabled)) rule.set('activated_at', iso(now))
   app.save(rule)
   if (changed || enabled !== values.enabled) resetStates(app, rule)
+  if(desired) setExclusions(app,rule,desired,actor,now)
   for (const incident of ruleIncidents(app, rule)) {
     if (changed) { resolve(app, incident, 'rule_changed', actor, now); continue }
     if (enabled !== values.enabled || cadenceChanged) {
       invalidate(app, incident)
       incident.set('schedule_generation', number(incident, 'schedule_generation') + 1)
       incident.set('version', number(incident, 'version') + 1)
-      incident.set('reminder_seconds', values.reminder_seconds)
-      incident.set('next_reminder_at', enabled !== values.enabled ? '' : iso(Math.max(now + values.reminder_seconds * 1000, time(string(incident, 'claim_until')) || 0)))
+      const interval=reminderInterval(rule,string(incident,'severity'))
+      incident.set('reminder_seconds', interval)
+      incident.set('next_reminder_at', enabled !== values.enabled ? '' : iso(Math.max(now + interval * 1000, time(string(incident, 'claim_until')) || 0)))
       app.save(incident)
       audit(app, incident, enabled !== values.enabled ? (values.enabled ? 'rule_enabled' : 'rule_disabled') : 'cadence_changed', actor, {}, now)
     }
@@ -246,9 +313,9 @@ function measured(condition, raw, container, priorEvidence) {
   evidence.value = value
   return { result: value === null || value === undefined ? 'unknown' : String(compare(value, condition.operator, condition.value)), value: value === undefined ? null : value, evidence }
 }
-function eligible(raw, rule, now) {
+function eligible(raw, rule, now, state) {
   const observed = time(raw.observed_at), effective = Math.min(observed, now)
-  return Number.isFinite(observed) && observed <= now + 300000 && effective >= now - 900000 && effective > time(string(rule, 'activated_at')) ? effective : null
+  return Number.isFinite(observed) && observed <= now + 300000 && effective >= now - 900000 && effective > Math.max(time(string(rule, 'activated_at')),state ? json(state,'data').activated_at || 0 : 0) ? effective : null
 }
 function openFor(app, rule, target) {
   return rows(app, 'incidents', 'rule={:rule} && resource_type={:type} && resource_id={:id} && status="open"', { rule: rule.id, type: target.resource_type, id: target.resource_id })[0]
@@ -294,9 +361,9 @@ function evaluate(app, rule, target, observation, effective, rawObserved, sample
         if (timed && severity === 'critical' && previousSeverity !== 'critical' && !criticalSatisfied) severity = 'warning'
         if (previousSeverity === 'critical' && severity === 'warning' && observation.complete === false) severity = previousSeverity
         if (severity !== previousSeverity) {
-          const deadline = time(string(incident, 'claim_until')), due = time(string(incident, 'next_reminder_at'))
+          const deadline = time(string(incident, 'claim_until')), due = time(string(incident, 'next_reminder_at')), interval=reminderInterval(rule,severity)
           invalidate(app, incident)
-          assign(incident, { severity, version: number(incident, 'version') + 1, schedule_generation: number(incident, 'schedule_generation') + 1, next_reminder_at: iso(deadline > now ? deadline : now + number(incident, 'reminder_seconds') * 1000) })
+          assign(incident, { severity, reminder_seconds:interval, version: number(incident, 'version') + 1, schedule_generation: number(incident, 'schedule_generation') + 1, next_reminder_at: iso(deadline > now ? deadline : now + interval * 1000) })
           app.save(incident)
           audit(app, incident, 'severity_changed', '', { from: previousSeverity, to: severity }, now)
           if (Number.isFinite(deadline) && deadline <= now && due <= deadline) audit(app, incident, 'claim_expired', '', { claim_until: string(incident, 'claim_until') }, now)
@@ -309,7 +376,7 @@ function evaluate(app, rule, target, observation, effective, rawObserved, sample
       } else if (data.satisfied) {
         let severity = severityFor(condition, string(rule, 'severity'), observation.evidence)
         if (timed && severity === 'critical' && !criticalSatisfied) severity = 'warning'
-        openIncident(app, Object.assign(targetFields(target), { organization: string(rule, 'organization'), rule: rule.id, origin: 'rule', title: string(rule, 'name'), severity, rule_revision: revision, evidence: observation.evidence, reminder_seconds: number(rule, 'reminder_seconds') }), '', now)
+        openIncident(app, Object.assign(targetFields(target), { organization: string(rule, 'organization'), rule: rule.id, origin: 'rule', title: string(rule, 'name'), severity, rule_revision: revision, evidence: observation.evidence, reminder_seconds: reminderInterval(rule,severity) }), '', now)
       }
     }
   }
@@ -327,10 +394,11 @@ function evaluateSnapshot(app, serverId, raw, reconciliation, now) {
   const targets = inventory(app, org).filter(target => target.server_id === serverId)
   const rules = rows(app, 'alert_rules', 'organization={:org} && enabled=true && archived=false', { org })
   for (const rule of rules) {
-    const effective = eligible(raw, rule, now)
-    if (effective === null) continue
-    const condition = json(rule, 'condition')
-    for (const target of targets.filter(target => matches(rule, target))) {
+    const condition = json(rule, 'condition'), excluded=exclusions(app,rule), previousStates=states(app,rule)
+    for (const target of targets.filter(target => matches(rule, target,excluded))) {
+      const existing=previousStates.find(state=>string(state,'resource_type')===target.resource_type && string(state,'resource_id')===target.resource_id)
+      const effective=eligible(raw,rule,now,existing)
+      if(effective===null) continue
       if (condition.metric === 'server.no_communication_seconds') {
         const agent = rows(app, 'server_agents', 'server={:server}', { server: serverId })[0]
         if (!agent) continue
@@ -372,7 +440,7 @@ function tick(app, now) {
   for (const rule of rules) {
     const org = string(rule, 'organization')
     if (!inventoryByOrg[org]) inventoryByOrg[org] = inventory(app, org)
-    const targets = inventoryByOrg[org].filter(target => matches(rule, target))
+    const excluded=exclusions(app,rule), targets = inventoryByOrg[org].filter(target => matches(rule, target,excluded))
     closeScopeExits(app, rule, targets, now)
     if (!boolean(rule, 'enabled')) continue
     const condition = json(rule, 'condition')
@@ -385,8 +453,10 @@ function tick(app, now) {
         continue
       }
       const state = stateFor(app, rule, target), data = json(state, 'data')
-      const grace = Math.max(time(string(rule, 'activated_at')) || now, time(string(agent, 'created')) || now)
-      const contact = Math.max(grace, data.last_contact || 0), elapsed = Math.max(0, (now - contact) / 1000)
+      const grace = Math.max(time(string(rule, 'activated_at')) || now, time(string(agent, 'created')) || now, data.activated_at || 0)
+      const current=json(target.record,'telemetry'), observed=time(current.observed_at || string(target.record,'last_seen'))
+      const usable=number(rule,'model_version')===2 && Number.isFinite(observed) && observed<=now+300000 && observed>=(time(string(agent,'created')) || 0) && !data.activated_at ? Math.min(now,observed) : 0
+      const contact = Math.max(usable || grace, data.last_contact || 0), elapsed = Math.max(0, (now - contact) / 1000)
       const positive = compare(elapsed, condition.operator, condition.value)
       const observation = { result: String(positive), value: elapsed, evidence: { metric: condition.metric, value: elapsed, last_contact_at: iso(contact), observed_at: iso(now) } }
       evaluate(app, rule, target, observation, now, now, '', now)
@@ -480,8 +550,8 @@ function removeTarget(app, type, id, reason, actor, now) {
 function simulate(app, org, body, now) {
   now = instant(now)
   const values = normalizeRule(body), condition = values.condition
-  const rule = { getString(key) { const value = values[key]; return typeof value === 'object' ? JSON.stringify(value) : String(value || '') } }
-  const targets = inventory(app, org).filter(target => matches(rule, target)), samples = {}
+  const rule = { get(key){return values[key]}, getString(key) { const value = values[key]; return typeof value === 'object' ? JSON.stringify(value) : String(value || '') } }
+  const allTargets=inventory(app,org).filter(target=>matches(rule,target)), targets = allTargets.filter(target => matches(rule, target, values.exclusions)), samples = {}
   const items = targets.map(target => {
     if (!(target.server_id in samples)) {
       const server = app.findRecordById('servers', target.server_id), current = json(server, 'telemetry')
@@ -508,6 +578,7 @@ function simulate(app, org, body, now) {
     }
     return Object.assign({ resource_type: target.resource_type, resource_id: target.resource_id, resource_name: target.resource_name, severity: observation.result === 'true' ? severityFor(condition, values.severity, observation.evidence) : null }, observation)
   })
-  return { items, totalItems: items.length }
+  const omitted=allTargets.filter(target=>!matches(rule,target,values.exclusions)).map(target=>({resource_type:target.resource_type,resource_id:target.resource_id,resource_name:target.resource_name,result:'excluded',reason:values.exclusions.find(item=>item.resource_id===target.resource_id).reason}))
+  return { items:items.concat(omitted), totalItems:allTargets.length, coverage:{total:allTargets.length,included:items.length,excluded:omitted.length,unknown:items.filter(item=>item.result==='unknown' || item.result==='skipped').length} }
 }
-module.exports = { catalog, normalizeRule, saveRule, archiveRule, simulate, evaluateSnapshot, tick, claim, resolve, sourceEvent, createIncident, validNotifications, removeTarget }
+module.exports = { catalog, normalizeRule, saveRule, archiveRule, simulate, evaluateSnapshot, tick, claim, resolve, sourceEvent, createIncident, validNotifications, removeTarget, exclusions, describeRule, reminderInterval, inventory, matches, stateFor, states, json, string, number, boolean, rows, create, assign, canonical, iso, time, audit, ruleAudit, ruleIncidents, invalidate, setExclusions, resetStates, conflict }

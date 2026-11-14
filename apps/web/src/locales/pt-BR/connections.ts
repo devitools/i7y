@@ -1,0 +1,21 @@
+export default {
+  "connections.title": "Conexões de backend",
+  "connections.manage": "Gerenciar conexões de backend",
+  "connections.help": "Entre em várias instalações. A central de incidentes inclui todas as instalações e organizações conectadas.",
+  "connections.add": "Adicionar backend",
+  "connections.addLogin": "Adicionar e entrar",
+  "connections.rename": "Renomear",
+  "connections.remove": "Remover conexão",
+  "connections.select": "Usar este backend",
+  "connections.selected": "Selecionado",
+  "connections.signedOut": "Desconectado",
+  "connections.empty": "Nenhuma conexão salva.",
+  "connections.unavailable": "Backend indisponível. As outras conexões permanecem ativas.",
+  "connections.addError": "Não foi possível adicionar este backend. Verifique a URL e o suporte à entrada pelo navegador.",
+  "connections.loginError": "Não foi possível autorizar esta conexão. Tente novamente.",
+  "connections.actionError": "Não foi possível atualizar esta conexão. Tente novamente.",
+  "incidents.allSources": "Todos os backends e organizações conectados",
+  "incidents.source": "Origem",
+  "incidents.partialSources": "Alguns backends estão indisponíveis. Os incidentes disponíveis são exibidos.",
+  "incidents.sourceUnavailable": "A origem deste incidente está indisponível. Reconecte o backend para continuar."
+}

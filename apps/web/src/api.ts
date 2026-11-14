@@ -1,19 +1,29 @@
 import type { RouteState } from './types'
 import PocketBase, { BaseAuthStore } from 'pocketbase'
 import { invoke } from '@tauri-apps/api/core'
-import { desktopRuntime, desktopFetch, desktopBackend, readDesktopBackend, persistDesktopBackend, syncDesktopContext } from './desktop-backend'
+import { desktopRuntime, desktopFetchFor, desktopBackend, desktopConnections, activeConnectionId, readDesktopConnections, syncDesktopContext } from './desktop-backend'
 import { ref } from 'vue'
 import { createOrganizationTransport } from './organization-context.ts'
+import { connectionClient, connectionClients, setupConnection, restoreConnection, onConnectionAuthChange, loadConnectionOrganizations, forgetConnection, updateConnectionNames, connectionRevision } from './connection-clients'
+export { connectionRevision } from './connection-clients'
+export { activeConnectionId, desktopConnections } from './desktop-backend'
 import { telemetrySince, serverStats } from './telemetry-summary.ts'
 import { createQueryCache } from './query-cache.ts'
 import { inventoryQuery } from './inventory-query.ts'
 import { createManagementApi } from './management.ts'
 export const pb = new PocketBase(desktopRuntime?'https://backend.invalid/':import.meta.env.VITE_POCKETBASE_URL || '/', desktopRuntime ? new BaseAuthStore() : undefined)
 export const authStore = pb.authStore
-export const activeOrganization = ref(null)
+let browserSessionGeneration=0
+const browserInboxClient=desktopRuntime?null:new PocketBase(pb.baseURL,authStore)
+if(browserInboxClient){
+  const transport=createOrganizationTransport(()=>null,undefined,()=>authStore.token)
+  browserInboxClient.beforeSend=transport.beforeSend
+  browserInboxClient.afterSend=(response,data)=>{transport.afterSend(response,data);if(response.status===401 && authStore.token)authStore.clear();return data}
+}
+export const activeOrganization = ref<string|null>(null)
 export const organizationChoices = ref([])
 export const globalAdmin = ref(false)
-const organizationTransport=createOrganizationTransport(()=>activeOrganization.value,desktopRuntime?desktopFetch:undefined,()=>authStore.token)
+const organizationTransport=createOrganizationTransport(()=>activeOrganization.value,undefined,()=>authStore.token,desktopRuntime?()=>desktopFetchFor(activeConnectionId.value):undefined)
 pb.beforeSend=organizationTransport.beforeSend
 export function setOrganization(id) {
   if(id===activeOrganization.value){if(desktopRuntime)syncDesktopContext(id);return}
@@ -22,13 +32,15 @@ export function setOrganization(id) {
   cache.clear()
   activeOrganization.value=id
   if(desktopRuntime)syncDesktopContext(id)
-  if(id)localStorage.setItem('i7y.organization.'+authStore.record?.id,id)
+  if(id)localStorage.setItem(organizationStorageKey(),id)
 }
+function organizationStorageKey() {return 'i7y.organization.'+(desktopRuntime?activeConnectionId.value+'.':'')+authStore.record?.id}
 export async function loadOrganizations() {
   const result=await pb.send('/api/i7y/organizations',{method:'GET',requestKey:null})
   organizationChoices.value=result.items
   globalAdmin.value=result.global_admin
-  const saved=localStorage.getItem('i7y.organization.'+authStore.record?.id)
+  if(desktopRuntime && activeConnectionId.value){const source=connectionClient(activeConnectionId.value);source.organizations=result.items;source.globalAdmin=result.global_admin;connectionRevision.value++}
+  const saved=localStorage.getItem(organizationStorageKey())
   setOrganization(result.items.find(r=>r.id===(activeOrganization.value || saved))?.id || result.items[0]?.id || null)
   return result
 }
@@ -58,7 +70,28 @@ export const tokenApi = {
 }
 const cache = createQueryCache()
 export const invalidateInventory = () => cache.clear()
-authStore.onChange(() => {if(desktopRuntime && !authStore.token)void invoke('desktop_session_clear');if(desktopRuntime){if(authStore.isValid)localStorage.setItem('i7y.desktop.authBackend',desktopBackend.value);else localStorage.removeItem('i7y.desktop.authBackend')}cache.clear();if(!authStore.isValid){organizationTransport.invalidate();activeOrganization.value=null;organizationChoices.value=[];globalAdmin.value=false}})
+let selectingConnection=false
+let syncingConnection=false
+const pendingLogouts=new Map<string,Promise<unknown>>()
+authStore.onChange(() => {
+  cache.clear();browserSessionGeneration++;connectionRevision.value++
+  if(desktopRuntime && activeConnectionId.value && !selectingConnection && !syncingConnection) {
+    const id=activeConnectionId.value,source=connectionClient(id)
+    syncingConnection=true
+    try {source.client.authStore.save(authStore.token,authStore.record)} finally {syncingConnection=false}
+    if(!authStore.token) {
+      const pending=invoke('desktop_connection_logout',{connectionId:id}).finally(()=>{if(pendingLogouts.get(id)===pending)pendingLogouts.delete(id)})
+      pendingLogouts.set(id,pending);void pending.catch(()=>{})
+    }
+  }
+  if(!authStore.isValid){organizationTransport.invalidate();activeOrganization.value=null;organizationChoices.value=[];globalAdmin.value=false}
+})
+onConnectionAuthChange(source=>{
+  if(source.id!==activeConnectionId.value || selectingConnection || syncingConnection)return
+  syncingConnection=true
+  try {authStore.save(source.client.authStore.token,source.client.authStore.record)} finally {syncingConnection=false}
+})
+
 const rawManagement = createManagementApi(pb)
 export const management = {...rawManagement}
 for (const method of ['create','update','remove']) management[method]=async(...args)=>{
@@ -134,39 +167,114 @@ export async function inventoryOperatingSystems(workspace=null) {
  })
 }
 
-export const desktopAuthApi = {
-  available: async () => {
-    const result=await pb.send('/api/i7y/desktop', {method:'GET',requestKey:null})
-    if(result?.browser_login!==true)throw Object.assign(new Error('Browser sign-in unavailable'),{status:404})
-    return result
-  },
-  authorize: (request: string, challenge: string) => pb.send('/api/i7y/desktop/authorize', {method:'POST',body:{request,challenge}}),
-  exchange: async (request: string, verifier: string, signal?: AbortSignal) => {
-    const result = await pb.send('/api/i7y/desktop/exchange', {method:'POST',body:{request,verifier},requestKey:null,signal})
-    if (!signal?.aborted && result.token && result.record) pb.authStore.save(result.token,result.record)
-    return !!result.token
-  },
+function desktopLoginApi(client:PocketBase) {
+  return {
+    available:async()=>{
+      const result=await client.send('/api/i7y/desktop',{method:'GET',requestKey:null})
+      if(result?.browser_login!==true)throw Object.assign(new Error('Browser sign-in unavailable'),{status:404})
+      return result
+    },
+    exchange:async(request:string,verifier:string,signal?:AbortSignal)=>{
+      const result=await client.send('/api/i7y/desktop/exchange',{method:'POST',body:{request,verifier},requestKey:null,signal})
+      if(!signal?.aborted && result.token && result.record)client.authStore.save(result.token,result.record)
+      return !!result.token
+    },
+  }
+}
+export const desktopAuthApi={
+  ...desktopLoginApi(pb),
+  authorize:(request:string,challenge:string)=>pb.send('/api/i7y/desktop/authorize',{method:'POST',body:{request,challenge}}),
+  forConnection:(id:string)=>desktopLoginApi(connectionClient(id).client),
 }
 
+export function connectedSources() {
+  if(desktopRuntime)return connectionClients().filter(source=>source.client.authStore.isValid)
+  connectionRevision.value
+  return authStore.isValid?[{id:'browser',name:new URL(pb.baseURL,window.location.origin).host,url:pb.baseURL,client:browserInboxClient!,organizations:organizationChoices.value,globalAdmin:globalAdmin.value,generation:browserSessionGeneration,error:'',unavailable:false}]:[]
+}
+export function incidentSourceClient(connectionId:string,organization:string) {
+  const source=desktopRuntime?connectionClient(connectionId):connectedSources().find(source=>source.id===connectionId)
+  if(!source || !source.client.authStore.isValid || !source.organizations.some(item=>item.id===organization))throw new Error('Incident source unavailable')
+  const generation=source.generation,token=source.client.authStore.token
+  const current=()=>desktopRuntime?source.generation===generation && connectionClients().includes(source):browserSessionGeneration===generation
+  return {source,send:async(path:string,options:any={})=>{
+    if(!current() || source.client.authStore.token!==token)throw new Error('Connection session changed')
+    const result=await source.client.send(path,{...options,headers:{...options.headers,'X-I7y-Organization':organization},requestKey:null})
+    if(!current() || source.client.authStore.token!==token)throw new Error('Connection session changed')
+    return result
+  }}
+}
+function applySelectedConnection(id:string) {
+  const source=id?connectionClient(id):null
+  selectingConnection=true
+  try {
+    organizationTransport.invalidate();pb.cancelAllRequests();cache.clear()
+    pb.baseURL=source?.url || 'https://backend.invalid/'
+    activeOrganization.value=null;organizationChoices.value=[];globalAdmin.value=false
+    authStore.save(source?.client.authStore.token || '',source?.client.authStore.record || null)
+    if(source?.client.authStore.isValid){organizationChoices.value=source.organizations;globalAdmin.value=source.globalAdmin}
+  } finally {selectingConnection=false}
+}
 export async function initializeDesktopBackend(): Promise<void> {
   if(!desktopRuntime)return
-  const backend=await readDesktopBackend()
-  if(backend)pb.baseURL=backend
+  const registry=await readDesktopConnections()
+  for(const item of registry.items)setupConnection(item)
   const legacyRaw=localStorage.getItem('pocketbase_auth')
   let legacyToken:string|null=null
-  try {if(backend && localStorage.getItem('i7y.desktop.authBackend')===backend)legacyToken=JSON.parse(legacyRaw || '{}').token || null}catch {}
-  if(backend){
-    const restored=await invoke<{token:string;record:any}|null>('desktop_session_restore',{legacyToken})
-    if(restored)pb.authStore.save(restored.token,restored.record)
-  }
-  localStorage.removeItem('pocketbase_auth')
+  try {if(desktopBackend.value && localStorage.getItem('i7y.desktop.authBackend')===desktopBackend.value)legacyToken=JSON.parse(legacyRaw || '{}').token || null}catch {}
+  await Promise.allSettled(registry.items.map(item=>restoreConnection(item.id,item.id===registry.selected?legacyToken:null)))
+  applySelectedConnection(registry.selected || '')
+  localStorage.removeItem('pocketbase_auth');localStorage.removeItem('i7y.desktop.authBackend')
+}
+let connectionSelectionGeneration=0
+export async function selectConnection(id:string):Promise<void> {
+  if(id===activeConnectionId.value)return
+  const generation=++connectionSelectionGeneration
+  organizationTransport.invalidate();pb.cancelAllRequests()
+  await invoke('select_connection',{connectionId:id})
+  await readDesktopConnections()
+  if(generation!==connectionSelectionGeneration)return
+  applySelectedConnection(activeConnectionId.value)
+  if(authStore.isValid)await loadOrganizations()
+}
+export async function addConnection(url:string,name='') {
+  const connection=await invoke<any>('add_connection',{backendUrl:url,name})
+  setupConnection(connection)
+  await readDesktopConnections()
+  return connection
+}
+export async function renameConnection(id:string,name:string) {
+  await invoke('rename_connection',{connectionId:id,name})
+  await readDesktopConnections();updateConnectionNames()
+}
+export async function logoutConnection(id:string) {
+  await invoke('desktop_connection_logout',{connectionId:id})
+  const source=connectionClient(id)
+  source.client.authStore.clear()
+}
+export async function removeConnection(id:string) {
+  const wasSelected=id===activeConnectionId.value
+  await invoke('remove_connection',{connectionId:id})
+  forgetConnection(id);await readDesktopConnections()
+  if(wasSelected)applySelectedConnection(activeConnectionId.value)
 }
 export async function selectDesktopBackend(url: string): Promise<void> {
-  if(url===desktopBackend.value)return
-  const backend=await persistDesktopBackend(url)
-  organizationTransport.invalidate()
-  pb.cancelAllRequests()
-  pb.authStore.clear()
-  cache.clear()
-  pb.baseURL=backend
+  const connection=await addConnection(url)
+  await selectConnection(connection.id)
+}
+export async function prepareConnectionLogin(id:string) {await pendingLogouts.get(id);return connectionClient(id)}
+export async function retryConnection(id:string) {await restoreConnection(id);if(id===activeConnectionId.value && authStore.isValid)await loadOrganizations()}
+export async function refreshConnectedOrganizations() {
+  if(!desktopRuntime) {
+    if(!authStore.isValid)return
+    const generation=browserSessionGeneration
+    const result=await browserInboxClient!.send('/api/i7y/organizations',{method:'GET',requestKey:null})
+    if(generation!==browserSessionGeneration)return
+    organizationChoices.value=result.items;globalAdmin.value=result.global_admin;connectionRevision.value++
+    if(activeOrganization.value && !result.items.some(item=>item.id===activeOrganization.value))setOrganization(result.items[0]?.id || null)
+    return
+  }
+  await Promise.allSettled(connectionClients().map(source=>source.client.authStore.isValid?loadConnectionOrganizations(source.id):source.unavailable?restoreConnection(source.id):Promise.resolve()))
+  const source=connectionClients().find(source=>source.id===activeConnectionId.value)
+  if(source?.client.authStore.isValid){organizationChoices.value=source.organizations;globalAdmin.value=source.globalAdmin;if(activeOrganization.value && !source.organizations.some(item=>item.id===activeOrganization.value))setOrganization(source.organizations[0]?.id || null)}
 }

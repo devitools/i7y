@@ -6,6 +6,7 @@ import ts from 'typescript'
 import en from '../apps/web/src/locales/en/alerts.ts'
 import ptBR from '../apps/web/src/locales/pt-BR/alerts.ts'
 import uk from '../apps/web/src/locales/uk/alerts.ts'
+import connectionEn from '../apps/web/src/locales/en/connections.ts'
 
 function apiHarness(respond = async () => ({id:'fixture',items:[]})) {
   const calls = []
@@ -75,7 +76,7 @@ test('all alert and incident UI strings exist in every supported locale',() => {
     const source = fs.readFileSync(new URL(`../apps/web/src/components/${name}.vue`,import.meta.url),'utf8')
     for (const match of source.matchAll(/\bt\('((?:alerts|incidents)\.[^']+)'\)/g)) {
       if (match[1].endsWith('.')) continue
-      assert.ok(en[match[1]],`${name}: ${match[1]}`)
+      assert.ok(en[match[1]] || connectionEn[match[1]],`${name}: ${match[1]}`)
     }
     assert.equal(source.includes('v-html'),false)
   }
@@ -84,7 +85,9 @@ test('all alert and incident UI strings exist in every supported locale',() => {
 test('rule and integration reminder fields share the backend seven-day bound',() => {
   const source = fs.readFileSync(new URL('../apps/web/src/components/AlertsPage.vue',import.meta.url),'utf8')
   assert.ok(source.includes('Number(value) <= 604800'))
-  assert.equal((source.match(/min="60" max="604800"/g) || []).length,2)
+  assert.equal((source.match(/min="60" max="604800"/g) || []).length,1)
+  assert.ok(source.includes('min="1" max="10080"'))
+  assert.ok(source.includes('positive(Number(value)*60)'))
   assert.equal(source.includes('2592000'),false)
   for (const dictionary of [en,ptBR,uk]) assert.ok(dictionary['alerts.reminderRange'].includes('604800'))
 })
@@ -111,6 +114,9 @@ function componentFunction(component, name, overrides = {}) {
     load:async ()=>{calls.push(['load'])},captureSecret:result=>{calls.push(['secret',result.integration.id])},
     ...overrides,
   }
+  context.sourceCanEdit ||= {value:context.props?.canEdit}
+  context.detailOrganization ||= context.activeOrganization
+  context.detailApi ||= {value:context.alertsApi}
   vm.createContext(context)
   vm.runInContext(ts.transpileModule(declaration.getText(ast),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context)
   return {context,calls,invoke:(...args)=>context[name](...args),confirm:()=>confirmation()}
@@ -181,6 +187,9 @@ test('clearing alert search preserves the list and subsequent searches still fil
     rules:{value:[{name:'Disk capacity',key:'disk',enabled:true,condition:{metric:'host.disk_percent'},target:'Production'},{name:'CPU usage',key:'cpu',enabled:false,condition:{metric:'host.cpu_percent'},target:'Staging'}]},
     ruleSearch:{value:null},ruleStatus:{value:'all'},ruleCondition:{value:null},ruleTarget:{value:null},targetLabel:rule=>rule.target,
   }
+  context.sourceCanEdit ||= {value:context.props?.canEdit}
+  context.detailOrganization ||= context.activeOrganization
+  context.detailApi ||= {value:context.alertsApi}
   vm.createContext(context)
   vm.runInContext('globalThis.filtered = '+declaration.initializer.getText(ast),context)
   assert.deepEqual(Array.from(context.filtered.value,rule=>rule.key),['disk','cpu'])

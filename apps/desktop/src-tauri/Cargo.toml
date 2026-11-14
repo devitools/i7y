@@ -9,6 +9,9 @@ cc = "1"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json"] }
+tokio = { version = "1", features = ["net", "sync", "time"] }
+subtle = "2"
 i7y-mcp = { path = "../mcp" }
 libc = "0.2"
 rand = "0.8"

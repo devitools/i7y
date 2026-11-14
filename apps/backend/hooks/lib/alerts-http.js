@@ -116,7 +116,9 @@ function positiveInteger(value,fallback,max) {
 }
 function listing(e,app,collection,org) {
   const q=query(e),page=positiveInteger(q.get('page'),1,1000000),perPage=positiveInteger(q.get('perPage'),50,100)
-  const clauses=['organization={:org}'],params={org}
+  const organizations=Array.isArray(org)?org:[org],params={}
+  if(!organizations.length)return {items:[],page,perPage,totalItems:0,totalPages:0}
+  const clauses=['('+organizations.map((id,index)=>{params['org'+index]=id;return 'organization={:org'+index+'}'}).join(' || ')+')']
   if(collection==='incidents') {
     const status=q.get('status')||'open'
     if(!['open','resolved','all'].includes(status))fail(400,'Invalid status')
@@ -129,7 +131,7 @@ function listing(e,app,collection,org) {
   }else if(collection==='alert_rules')clauses.push('archived=false')
   const filter=clauses.join(' && ')
   const count=app.findRecordsByFilter(collection,filter,'',0,0,params).length
-  const records=app.findRecordsByFilter(collection,filter,collection==='incidents'?'-opened_at,-created':'-created',perPage,(page-1)*perPage,params)
+  const records=app.findRecordsByFilter(collection,filter,collection==='incidents'?'-opened_at,-created,-id':'-created',perPage,(page-1)*perPage,params)
   return {items:records.map(r=>dto(r,collection)),page,perPage,totalItems:count,totalPages:Math.ceil(count/perPage)}
 }
 function receipt(app,org,producer,operation,key,body,action,required=false) {
@@ -158,7 +160,7 @@ function normalizeGcp(body) {
   if(typeof i.url==='string' && /^https?:\/\//i.test(i.url))event.evidence.url=i.url
   return normalizeEvent(event)
 }
-function credential(e,app,kind) {
+function credential(e,app,kind,deferContext=false) {
   const id=text(e.request.pathValue('id'),'integration ID',15,true)
   let secret=''
   const auth=e.request.header.get('Authorization')
@@ -177,10 +179,26 @@ function credential(e,app,kind) {
   try{integration=app.findRecordById('alert_integrations',id)}catch(_){fail(401,'Invalid integration credential')}
   if(!integration.getBool('enabled') || integration.getString('kind')!==kind || integration.getString('token_hash')!==$security.sha256(secret))fail(401,'Invalid integration credential')
   const org=integration.getString('organization'),selected=e.request.header.get('X-I7y-Organization')
-  if(selected && selected!==org)fail(403,'Integration organization mismatch')
+  if(selected && selected!==org && !deferContext)fail(403,'Integration organization mismatch')
   find(app,'organizations',org)
   if(integration.getString('workspace_id'))inventoryContext(app,'workspace',integration.getString('workspace_id'),org)
   return integration
+}
+function transferredReplay(e,app,integration,body) {
+  const org=integration.getString('organization'),selected=e.request.header.get('X-I7y-Organization')
+  const mismatch=(selected && selected!==org) || (body.organization!==undefined && body.organization!==org) || (body.workspace_id!==undefined && body.workspace_id!==integration.getString('workspace_id'))
+  if(!mismatch)return null
+  const key=text(e.request.header.get('Idempotency-Key'),'Idempotency-Key',200)
+  if(!key)return null
+  const past=app.findRecordsByFilter('alert_receipts','organization={:org} && producer={:producer} && operation="source-event" && key={:key}','',1,0,{org,producer:'integration:'+integration.id,key})[0]
+  if(!past)return null
+  if(past.getString('payload_hash')!==$security.sha256(canonical(body)))fail(409,'Idempotency-Key was used for another payload')
+  const transfers=app.findRecordsByFilter('alert_integration_transfers','integration={:integration}','',0,0,{integration:integration.id})
+  const origins=new Set([org])
+  let changed=true
+  while(changed){changed=false;for(const transfer of transfers)if(origins.has(transfer.getString('destination_organization')) && !origins.has(transfer.getString('source_organization'))){origins.add(transfer.getString('source_organization'));changed=true}}
+  if(origins.size===1 || (selected && !origins.has(selected)) || (body.organization!==undefined && !origins.has(body.organization)))return null
+  return json(past,'result',{})
 }
 function invalidateIntegration(app,integration,now) {
   for(const incident of app.findRecordsByFilter('incidents','integration={:integration} && status="open"','',0,0,{integration:integration.id})){
@@ -214,12 +232,16 @@ function handle(e,operation) {
   if(operation==='source-generic' || operation==='source-gcp'){
     let result
     e.app.runInTransaction(app=>{
-      const kind=operation==='source-gcp'?'gcp':'generic',integration=credential(e,app,kind),body=e.requestInfo().body||{},org=integration.getString('organization')
-      if(body.organization!==undefined && body.organization!==org)fail(403,'Integration organization mismatch')
-      if(body.workspace_id!==undefined && body.workspace_id!==integration.getString('workspace_id'))fail(403,'Integration workspace mismatch')
+      const kind=operation==='source-gcp'?'gcp':'generic',integration=credential(e,app,kind,true),body=e.requestInfo().body||{},org=integration.getString('organization')
       if(body.integration!==undefined && body.integration!==integration.id)fail(403,'Integration identity mismatch')
       const event=kind==='gcp'?normalizeGcp(body):normalizeEvent(body)
-      result=receipt(app,org,'integration:'+integration.id,'source-event',e.request.header.get('Idempotency-Key'),body,()=>dto(mapped(()=>engine.sourceEvent(app,integration,event)),'incidents'))
+      result=transferredReplay(e,app,integration,body)
+      if(!result){
+        const selected=e.request.header.get('X-I7y-Organization')
+        if((selected && selected!==org) || (body.organization!==undefined && body.organization!==org))fail(403,'Integration organization mismatch')
+        if(body.workspace_id!==undefined && body.workspace_id!==integration.getString('workspace_id'))fail(403,'Integration workspace mismatch')
+        result=receipt(app,org,'integration:'+integration.id,'source-event',e.request.header.get('Idempotency-Key'),body,()=>dto(mapped(()=>engine.sourceEvent(app,integration,event)),'incidents'))
+      }
       integration.set('last_received_at',new Date().toISOString())
       integration.set('last_event',{external_id:event.external_id,state:event.state,title:event.title,severity:event.severity,incident_id:result.id})
       app.save(integration)
@@ -270,6 +292,7 @@ function handle(e,operation) {
       const rows=app.findRecordsByFilter('alert_rules','organization={:org} && key={:key}','',1,0,{org:p.org,key:e.request.pathValue('key')})
       if(Number(expected)!==(rows.length?rows[0].getInt('edit_version'):0))fail(409,'Rule changed; review a new request')
     }
+    if(['rule-save','rule-archive'].includes(operation) && (body.model_version===2 || engine.rows(app,'alert_rules','organization={:org} && model_version=2 && archived=false',{org:p.org}).length)) fail(409,'Update the client to manage type rules')
     if(operation==='rule-save'){
       const key=text(e.request.pathValue('key'),'rule key',120,true)
       if(!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(key))fail(400,'Invalid rule key')
@@ -310,4 +333,4 @@ function handle(e,operation) {
   if(operation==='rule-archive' || operation==='integration-delete')return e.noContent(204)
   return e.json(['incident-create','integration-create'].includes(operation)?201:200,result)
 }
-module.exports={handle,normalizeEvent,normalizeGcp,canonical,permission,credential,dto,receipt,inventoryContext,claimDeadline}
+module.exports={handle,normalizeEvent,normalizeGcp,canonical,permission,credential,dto,receipt,inventoryContext,claimDeadline,listing,positiveInteger}

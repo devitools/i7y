@@ -1,25 +1,50 @@
 # Desktop MCP
 
 The desktop owns the authenticated API session, local approvals and SSH execution.
-The bundled `i7y-mcp` executable translates newline-delimited MCP over stdio to a
-private local socket. It never receives the backend session token. No HTTP port
-or local inventory database is created.
+The app serves Streamable HTTP on IPv4 loopback, by default at `http://127.0.0.1:47831/mcp`.
+The client authenticates with a local transport credential, never the backend
+session token. No local inventory database is created. The bundled `i7y-mcp`
+stdio connector remains available for existing clients.
 
 ## Enable and configure
 
 On macOS, sign in to the desktop, select an organization, and open **Session menu
-> Desktop integrations** (`#/desktop/mcp`). Enable local MCP and copy the generated
-configuration into the MCP client's configuration. For Codex this is
-`~/.codex/config.toml`. Use the generated absolute path for the actual installation:
+> Desktop integrations** (`#/desktop/mcp`). Enable local MCP, then open
+**Connections > MCP connection**. The connection details apply to any client that
+supports Streamable HTTP with custom request headers; no client-specific setup is
+required in i7y. Enter the server URL and send the displayed Authorization header
+with each request. Use the copy buttons for the URL/header or copy all connection
+details as JSON. The on-screen JSON preview masks the credential; copying includes
+its actual value. Adapt the JSON fields to your client's configuration format.
+The desktop does not change client configuration files automatically.
 
-```toml
-[mcp_servers.i7y]
-command = "/Applications/i7y.app/Contents/MacOS/i7y-mcp"
+```json
+{
+  "transport": "streamable_http",
+  "url": "http://127.0.0.1:47831/mcp",
+  "headers": { "Authorization": "Bearer <local-token>" }
+}
 ```
 
+The HTTP port accepts whole numbers from 1024 to 65535. **Save port** applies the
+change immediately and persists it across app restarts. i7y binds the replacement
+loopback listener and saves the new configuration before stopping the previous
+listener. An invalid/unavailable port or a settings-write failure leaves the active
+listener, sessions and selected port unchanged. Successful port changes terminate
+old HTTP sessions, revoke their read grants and cancel pending consent; executing
+operations remain recoverable through their request/operation IDs. Update the URL
+in every client after a change. The transport credential stays the same. Saving
+the currently active port does not disconnect clients.
+
+Private settings are stored as `mcp-http-settings.json` and generic connection
+information as `mcp-http.json` in the app configuration directory. A generated
+`mcp-http-codex.toml` remains for compatibility with previously copied setup files;
+this is an optional export, not a required client. Development uses separate `-dev`
+settings/exports and defaults to port 47832.
+
 Starting the MCP client and discovering tools do not request authorization. The
-connector opens the desktop connection when a tool is called, so the client can
-start before the desktop. Keep the desktop running while using its tools. The
+HTTP session connects to the authenticated desktop context when a tool is called.
+Keep the desktop running while connecting the client and using its tools. The
 first data access after authorization expires requests read access; changes and
 operations require their own approval. When a request needs approval,
 i7y automatically opens a separate foreground authorization window, even when
@@ -57,7 +82,30 @@ with a new request ID. Polling and repeated requests do not extend the grant.
 Revocation, context change, disconnect or system lock ends access earlier. Each mutation requires a separate review and authentication. A badge in the
 application header indicates pending requests.
 
-MCP starts disabled. Its native channel accepts only same-user peers. Release
+MCP starts disabled. HTTP binds only to IPv4 loopback and requires an unpredictable
+256-bit bearer credential on every request. Host must match the configured literal
+loopback address and port; Origin, when present, must match that origin exactly.
+There is no CORS access, public listener, unauthenticated discovery endpoint or
+backend token export. A busy port fails closed and is reported in Desktop integrations.
+The per-installation credential, settings and generated connection exports are stored in
+the desktop's app configuration directory as owner-only files (0600), in an
+owner-only directory (0700). Symlinks, hard links, foreign ownership and unsafe file
+permissions are rejected. Keep the generated Codex configuration private too.
+The transport credential persists across app updates/restarts. It authenticates
+only the local transport and never grants inventory access or mutation approval.
+
+Initialization creates an isolated, unpredictable `MCP-Session-Id`; follow-up
+requests must supply it. Idle sessions expire after one hour. DELETE terminates a
+session and revokes its read grant and pending consent. HTTP request completion or
+disconnection does not terminate the session or imply mutation cancellation.
+Context changes, system lock, revocation and app restart invalidate access;
+expired/revoked session IDs return 404 so the client can initialize again, with fresh
+read consent. GET returns 405 because this server uses JSON responses and polling
+rather than a standalone SSE stream. Protocol versions 2025-03-26, 2025-06-18 and
+2025-11-25 are supported. Request/response size and concurrent work are bounded.
+Tool calls are not replayed automatically; reconcile uncertain writes by request ID.
+
+The compatibility stdio channel accepts only same-user peers. Release
 builds additionally require the connector at its bundled path with a valid code
 signature from the desktop's signing team. Debug builds use a separate socket
 and validate the executable path; they do not assert a release signature.
@@ -69,7 +117,7 @@ verification fails closed. Socket names also include the executable installation
 are scoped by application identifier, build mode and backend, so review copies can
 run without sharing a connection or session with the installed app.
 
-No backend URL, password or API token is needed in the MCP configuration. Backend
+No backend URL, password or backend API token is needed in the MCP configuration. Backend
 connectivity, organization membership and current API permissions still apply.
 
 ## Tools
@@ -79,7 +127,7 @@ connectivity, organization membership and current API permissions still apply.
 | Connection | `connection_status`, `request_status` |
 | Inventory | `list_workspaces`, `search_inventory`, `list_servers`, `get_server`, `list_projects`, `get_project`, `list_containers`, `get_container`, `list_images` |
 | Telemetry | `get_resource_telemetry` |
-| Rules | `list_alert_metrics`, `list_alert_rules`, `get_alert_rule`, `simulate_alert_rule`, `save_alert_rule`, `archive_alert_rule` |
+| Rules | `list_alert_metrics`, `list_alert_rules`, `get_alert_rule`, `simulate_alert_rule`, `save_alert_rule`, `archive_alert_rule`, `preview_alert_rule_migration`, `apply_alert_rule_migration` |
 | Incidents | `list_incidents`, `get_incident`, `create_incident`, `claim_incident`, `resolve_incident` |
 | Operations | `automation_capabilities`, `inspect_resource`, `plan_operation`, `submit_operation`, `get_operation` |
 
@@ -247,4 +295,6 @@ controller is changed by building or testing the integration.
 
 The stdio connector detects a closed idle desktop socket and opens a new verified connection before the next tool call. It repeats the client handshake, not the previous tool action. Read consent and mutation approval remain scoped to the new desktop connection and current session context.
 
-If a socket fails after a tool action was sent, its result remains uncertain: the connector does not replay that action. Reconcile the original request or operation status before considering another mutation. After updating the bundled connector, fully quit and reopen the MCP client to load the new executable.
+If a socket fails after a tool action was sent, its result remains uncertain: the connector does not replay that action. Reconcile the original request or operation status before considering another mutation. Clients still using stdio must restart their connector after its executable is replaced. HTTP clients use the stable URL and a new MCP session after app restart; they do not load a bundled executable. Development HTTP uses port 47832 and separate credential/configuration files.
+
+Type-rule management requires the v2 backend capabilities for type coverage, exclusions and severity reminders. Native review shows the resource type, per-severity intervals, exclusion count and structured reasons. Migration applies only a reviewed plan hash and normalized options; inventory/rule changes invalidate that plan. Existing incident/notification envelopes remain v1 for client compatibility.

@@ -18,7 +18,7 @@ fn list() -> Value {
         &[],
     )
 }
-fn rule() -> Value {
+fn legacy_rule() -> Value {
     object(
         json!({"name":string(),"scope_type":{"type":"string","enum":["workspace","server","container"]},"scope_id":id(),"condition":object(json!({"metric":string(),"operator":string(),"value":{"anyOf":[{"type":"number"},{"type":"string","maxLength":32}]},"critical_value":{"type":"number","minimum":0,"maximum":100,"description":"Optional critical threshold for warning CPU, memory or disk gt/gte rules; must exceed value."},"disk_path":string(),"state":string()}),&["metric","operator"]),"severity":{"type":"string","enum":["info","warning","critical"]},"duration_seconds":{"type":"integer","minimum":0,"maximum":604800,"description":"Sustained seconds before initial entry. CPU and memory thresholds require this duration independently per severity. Simulation ignores duration."},"reminder_seconds":integer(60,604800),"enabled":{"type":"boolean"}}),
         &[
@@ -32,6 +32,32 @@ fn rule() -> Value {
             "enabled",
         ],
     )
+}
+fn intervals() -> Value {
+    object(json!({"info":integer(60,604800),"warning":integer(60,604800),"critical":integer(60,604800)}), &[])
+}
+fn exclusion() -> Value {
+    object(json!({"resource_type":{"type":"string","enum":["server","container"]},"resource_id":id(),"reason":{"type":"string","minLength":1,"maxLength":1024}}), &["resource_type","resource_id","reason"])
+}
+fn type_rule() -> Value {
+    let mut schema=legacy_rule();
+    let props=schema["properties"].as_object_mut().unwrap();
+    props.remove("scope_type");props.remove("scope_id");props.remove("reminder_seconds");
+    props.insert("model_version".into(),json!({"type":"integer","enum":[2]}));
+    props.insert("target_type".into(),json!({"type":"string","enum":["server","container"]}));
+    props.insert("reminder_intervals".into(),intervals());
+    props.insert("exclusions".into(),json!({"type":"array","items":exclusion(),"maxItems":10000}));
+    schema["required"]=json!(["model_version","name","target_type","condition","severity","duration_seconds","reminder_intervals","enabled","exclusions"]);
+    schema
+}
+fn rule() -> Value {json!({"anyOf":[type_rule(),legacy_rule()]})}
+fn migration_options() -> Value {
+    let mut metrics=serde_json::Map::new();
+    for metric in ["host.cpu_percent","host.memory_percent","host.disk_percent","server.no_communication_seconds","container.cpu_percent","container.memory_percent","container.state","container.health"] {metrics.insert(metric.into(),intervals());}
+    let mut excluded=exclusion();
+    excluded["properties"]["metric"]=string();
+    excluded["required"]=json!(["metric","resource_type","resource_id","reason"]);
+    object(json!({"reminder_overrides":object(Value::Object(metrics),&[]),"exclusions":{"type":"array","items":excluded,"maxItems":10000},"no_communication_seconds":integer(60,604800)}),&[])
 }
 pub fn catalog() -> Vec<Value> {
     let mut out = Vec::new();
@@ -200,6 +226,8 @@ pub fn catalog() -> Vec<Value> {
         object(json!({"operation_id":string()}), &["operation_id"]),
         false,
     );
+    add("preview_alert_rule_migration","Preview consolidation by type; reports conflicts, coverage and an immutable plan hash without writes.",object(json!({"options":migration_options()}),&[]),false);
+    add("apply_alert_rule_migration","Apply the reviewed plan hash after local authorization; preserves compatible incidents and archives source rules.",object(json!({"plan_hash":{"type":"string","minLength":64,"maxLength":64},"options":migration_options()}),&["plan_hash","options"]),true);
     out
 }
 pub fn validate(name: &str, args: &Value) -> Result<bool, String> {
@@ -233,6 +261,7 @@ fn check(schema: &Value, v: &Value) -> Result<(), String> {
     }
     let valid = match schema["type"].as_str() {
         Some("object") => v.is_object(),
+        Some("array") => v.is_array(),
         Some("string") => v.is_string(),
         Some("integer") => v.is_i64() || v.is_u64(),
         Some("number") => v.is_number(),
@@ -241,6 +270,10 @@ fn check(schema: &Value, v: &Value) -> Result<(), String> {
     };
     if !valid {
         return Err("Invalid argument type".into());
+    }
+    if let Some(items)=v.as_array() {
+        if items.len() > schema["maxItems"].as_u64().unwrap_or(10000) as usize {return Err("Too many array entries".into());}
+        for item in items {check(&schema["items"],item)?;}
     }
     if let Some(values) = schema["enum"].as_array() {
         if !values.contains(v) {
@@ -315,6 +348,7 @@ pub fn api_call(name: &str, args: &Value) -> Result<ApiCall, String> {
         revision: None,
     };
     let alerts = "api/i7y/alerts/v1";
+    let rules_api=if args["rule"]["model_version"]==2 || ["list_alert_metrics","list_alert_rules","get_alert_rule","archive_alert_rule"].contains(&name) {"api/i7y/alerts/v2"} else {alerts};
     if let Some(resource) = name
         .strip_prefix("list_")
         .filter(|r| ["workspaces", "servers", "projects", "containers", "images"].contains(r))
@@ -370,10 +404,10 @@ pub fn api_call(name: &str, args: &Value) -> Result<ApiCall, String> {
                         .push(("fields".into(), "id,name,last_seen,telemetry".into()));
                 }
             }
-            "list_alert_metrics" => c.path = format!("{alerts}/metrics"),
-            "list_alert_rules" => c.path = format!("{alerts}/rules"),
+            "list_alert_metrics" => c.path = format!("{rules_api}/metrics"),
+            "list_alert_rules" => c.path = format!("{rules_api}/rules"),
             "get_alert_rule" | "save_alert_rule" | "archive_alert_rule" => {
-                c.path = format!("{alerts}/rules/{}", segment(&args["key"])?);
+                c.path = format!("{rules_api}/rules/{}", segment(&args["key"])?);
                 if name != "get_alert_rule" {
                     c.method = if name == "save_alert_rule" {
                         "PUT"
@@ -387,9 +421,14 @@ pub fn api_call(name: &str, args: &Value) -> Result<ApiCall, String> {
                 }
             }
             "simulate_alert_rule" => {
-                c.path = format!("{alerts}/rules/simulate");
+                c.path = format!("{rules_api}/rules/simulate");
                 c.method = "POST";
                 c.body = Some(args["rule"].clone());
+            }
+            "preview_alert_rule_migration" | "apply_alert_rule_migration" => {
+                c.method="POST";
+                c.path=format!("api/i7y/alerts/v2/migration/{}",if name=="apply_alert_rule_migration" {"apply"} else {"preview"});
+                c.body=Some(args.clone());
             }
             "list_incidents" => {
                 c.path = format!("{alerts}/incidents");
@@ -549,4 +588,37 @@ mod tests {
         }
     }
 
+}
+
+#[cfg(test)]
+mod type_rule_tests {
+    use super::*;
+    fn draft() -> Value {
+        json!({"model_version":2,"name":"Memory","target_type":"server","condition":{"metric":"host.memory_percent","operator":"gt","value":80,"critical_value":90},"severity":"warning","duration_seconds":300,"reminder_intervals":{"warning":1800,"critical":300},"enabled":true,"exclusions":[{"resource_type":"server","resource_id":"abcdefghijklmno","reason":"Accepted saturation"}]})
+    }
+    #[test]
+    fn type_rules_validate_exclusion_arrays_and_use_v2() {
+        let args=json!({"key":"memory","expected_version":3,"rule":draft()});
+        assert_eq!(validate("save_alert_rule",&args).unwrap(),true);
+        let call=api_call("save_alert_rule",&args).unwrap();
+        assert!(call.path.contains("/alerts/v2/rules/"));
+        assert_eq!(call.revision.as_deref(),Some("3"));
+        assert_eq!(call.body.unwrap()["exclusions"][0]["reason"],"Accepted saturation");
+        let mut invalid=args.clone();invalid["rule"]["exclusions"][0]["resource_id"]=json!("bad-id");
+        assert!(validate("save_alert_rule",&invalid).is_err());
+        invalid=args.clone();invalid["rule"]["reminder_intervals"]["critical"]=json!(0);
+        assert!(validate("save_alert_rule",&invalid).is_err());
+        invalid=args.clone();invalid["rule"]["scope_id"]=json!("abcdefghijklmno");
+        assert!(validate("save_alert_rule",&invalid).is_err());
+    }
+    #[test]
+    fn migration_preview_is_read_only_and_apply_is_reviewed() {
+        assert_eq!(validate("preview_alert_rule_migration",&json!({"options":{}})).unwrap(),false);
+        let args=json!({"plan_hash":"a".repeat(64),"options":{"exclusions":[{"metric":"host.memory_percent","resource_type":"server","resource_id":"abcdefghijklmno","reason":"Accepted saturation"}],"no_communication_seconds":900}});
+        assert_eq!(validate("apply_alert_rule_migration",&args).unwrap(),true);
+        assert_eq!(api_call("apply_alert_rule_migration",&args).unwrap().path,"api/i7y/alerts/v2/migration/apply");
+        let mut invalid=args.clone();invalid["options"]["exclusions"][0]["command"]=json!("ignored");
+        assert!(validate("apply_alert_rule_migration",&invalid).is_err());
+        assert!(validate("apply_alert_rule_migration",&json!({"plan_hash":"a".repeat(64)})).is_err());
+    }
 }

@@ -1,28 +1,64 @@
 <script setup lang="ts">
 import { computed, ref, watch, onUnmounted } from 'vue'
 import { useQuasar } from 'quasar'
-import { pb, activeOrganization } from '../api'
+import { pb, activeOrganization, organizationChoices, globalAdmin } from '../api'
 import { alertsApi, inventoryLabel, integrationEndpoint, severityColor, alertLoadError } from '../alerts-api'
 import { alertTargetChoices, filterAlertTargets, emptyTargetFilters, type TargetFilters } from '../alert-targets'
 import { t, locale } from '../i18n'
 import PageHeader from './PageHeader.vue'
 import { leadingRowActions } from '../table-columns'
 import PageActions from './PageActions.vue'
+import IntegrationTransferDialog from './IntegrationTransferDialog.vue'
 const props = defineProps<{route: any, canEdit: boolean}>()
 const q = useQuasar()
 const loading = ref(false), busy = ref(false), error = ref(''), rules = ref<any[]>([]), integrations = ref<any[]>([]), metrics = ref<any[]>([])
 const inventory = ref<any>({workspace: [], server: [], container: [], project: []}), preview = ref<any>(null)
 const targetSearch = ref(''), targetFilters = ref(emptyTargetFilters())
+const transferIntegration=ref<any>(null)
+const transferAvailable=computed(()=>!!organizationChoices.value.find(org=>org.id===activeOrganization.value && (globalAdmin.value || org.role==='admin')) && organizationChoices.value.some(org=>org.id!==activeOrganization.value && (globalAdmin.value || org.role==='admin')))
 const integrationDialog = ref(false), integrationEdit = ref(''), secret = ref(''), secretIntegration = ref<any>(null)
-const freshRule = () => ({key: '', name: '', enabled: true, severity: 'warning', scope_type: 'workspace', scope_id: '', target_type: 'server', condition: {metric: 'host.cpu_percent', operator: 'gt', value: 90, disk_path: ''}, duration_seconds: 0, reminder_seconds: 900})
+const freshRule = () => ({model_version:2, key:'', name:'', enabled:true, severity:'warning', target_type:'server', condition:{metric:'host.cpu_percent',operator:'gt',value:80,critical_value:90,disk_path:''},duration_seconds:300,reminder_intervals:{info:1800,warning:1800,critical:1800},exclusions:[] as any[]})
+const exclusionTarget=ref<string | null>(null), exclusionReason=ref(''), exclusionSearch=ref(''), migrationPlan=ref<any>(null)
+const migrationMetric=ref(''), migrationTarget=ref<string | null>(null), migrationReason=ref('')
+const migrationMetricChoices=computed(()=>(migrationPlan.value?.items || []).map((item:any)=>({value:item.rule.condition.metric,label:item.rule.name+' · '+t('alerts.scope.'+item.rule.target_type)})))
+const migrationTargetChoices=computed(()=>alertTargetChoices(inventory.value,migrationPlan.value?.items.find((item:any)=>item.rule.condition.metric===migrationMetric.value)?.rule.target_type || 'server'))
+async function updateMigrationExclusion(removeId?:string, removeMetric?:string) {
+  if(!migrationPlan.value || busy.value || (!removeId && (!migrationTarget.value || !migrationReason.value.trim())))return
+  const org=activeOrganization.value,options={...migrationPlan.value.options,exclusions:[...migrationPlan.value.options.exclusions]}
+  if(removeId)options.exclusions=options.exclusions.filter((item:any)=>item.resource_id!==removeId || item.metric!==removeMetric)
+  else {const type=migrationPlan.value.items.find((item:any)=>item.rule.condition.metric===migrationMetric.value).rule.target_type;options.exclusions=options.exclusions.filter((item:any)=>item.resource_id!==migrationTarget.value || item.metric!==migrationMetric.value);options.exclusions.push({metric:migrationMetric.value,resource_type:type,resource_id:migrationTarget.value,reason:migrationReason.value.trim()})}
+  busy.value=true
+  try {const plan=await alertsApi.previewMigration(options);if(org===activeOrganization.value){migrationPlan.value=plan;migrationTarget.value=null;migrationReason.value=''}}catch {if(org===activeOrganization.value)error.value=t('alerts.migrationError')}finally {busy.value=false}
+}
+const legacyRules=computed(()=>rules.value.some(rule=>rule.model_version!==2))
+const reminderBands=computed(()=>hasCritical.value?['warning','critical']:[form.value.severity])
+const exclusionChoices=computed(()=>alertTargetChoices(inventory.value,form.value.target_type).filter(row=>!form.value.exclusions.some((item:any)=>item.resource_id===row.value) && [row.label,row.description].join(' ').toLowerCase().includes(exclusionSearch.value.toLowerCase())))
+function addExclusion() {
+  if(!exclusionTarget.value || !exclusionReason.value.trim())return
+  const selected=alertTargetChoices(inventory.value,form.value.target_type).find(row=>row.value===exclusionTarget.value)
+  form.value.exclusions.push({resource_type:form.value.target_type,resource_id:exclusionTarget.value,resource_name:selected?.label || exclusionTarget.value,reason:exclusionReason.value.trim()})
+  exclusionTarget.value=null;exclusionReason.value='';exclusionSearch.value=''
+}
+function filterExclusions(value:string,update:(fn:()=>void)=>void) {update(()=>{exclusionSearch.value=value})}
+function reminderLabel(rule:any) {
+  const intervals=rule.reminder_intervals || {[rule.severity]:rule.reminder_seconds}
+  return ['info','warning','critical'].filter(band=>intervals[band]!==undefined).map(band=>t('alerts.severity.'+band)+': '+Number(intervals[band])/60+' '+t('alerts.minutes')).join(' · ')
+}
+async function previewMigration() {busy.value=true;error.value='';const org=activeOrganization.value;try {const plan=await alertsApi.previewMigration();if(org===activeOrganization.value){migrationPlan.value=plan;migrationMetric.value=plan.items.find((item:any)=>item.rule.condition.metric==='host.memory_percent')?.rule.condition.metric || plan.items[0]?.rule.condition.metric || ''}}catch {if(org===activeOrganization.value)error.value=t('alerts.migrationError')}finally {busy.value=false}}
+async function applyMigration() {
+  const plan=migrationPlan.value,org=activeOrganization.value
+  if(!plan?.can_apply || busy.value || !props.canEdit)return
+  busy.value=true;error.value=''
+  try {await alertsApi.applyMigration(plan.plan_hash,plan.options);if(org===activeOrganization.value){migrationPlan.value=null;await load(true)}}catch {if(org===activeOrganization.value)error.value=t('alerts.migrationChanged')}finally {busy.value=false}
+}
 const ruleSearch = ref(''), ruleStatus = ref('all'), ruleCondition = ref<string | null>(null), ruleTarget = ref<string | null>(null)
 const rulePagination = ref({page:1,rowsPerPage:10})
 const conditionFilterOptions = computed(() => [...new Set([...metrics.value.map(row => row.id), ...rules.value.map(rule => rule.condition?.metric)].filter(Boolean))].map(value => {const key='alerts.metric.'+value;return {value,label:t(key)===key?value:t(key)}}).sort((left,right)=>left.label.localeCompare(right.label)))
 const targetFilterOptionsForRules = computed(() => {
-  const choices=[...new Map(rules.value.map(rule => [rule.scope_type+':'+rule.scope_id,{value:rule.scope_type+':'+rule.scope_id,label:targetLabel(rule)+' · '+t('alerts.scope.'+rule.scope_type)}])).values()]
+  const choices=[...new Map(rules.value.map(rule => [rule.model_version===2?'type:'+rule.target_type:rule.scope_type+':'+rule.scope_id,{value:rule.model_version===2?'type:'+rule.target_type:rule.scope_type+':'+rule.scope_id,label:rule.model_version===2?targetLabel(rule):targetLabel(rule)+' · '+t('alerts.scope.'+rule.scope_type)}])).values()]
   return choices.map(row => ({...row,label:choices.some(other => other.value!==row.value && other.label===row.label)?row.label+' · '+row.value.split(':').slice(1).join(':'):row.label})).sort((left,right)=>left.label.localeCompare(right.label))
 })
-const filteredRules = computed(() => rules.value.filter(rule => (!ruleCondition.value || rule.condition?.metric===ruleCondition.value) && (!ruleTarget.value || rule.scope_type+':'+rule.scope_id===ruleTarget.value) && (ruleStatus.value==='all' || rule.enabled===(ruleStatus.value==='enabled')) && [rule.name,rule.key,rule.condition?.metric,targetLabel(rule)].join(' ').toLowerCase().includes(String(ruleSearch.value || '').toLowerCase())))
+const filteredRules = computed(() => rules.value.filter(rule => (!ruleCondition.value || rule.condition?.metric===ruleCondition.value) && (!ruleTarget.value || (rule.model_version===2?'type:'+rule.target_type:rule.scope_type+':'+rule.scope_id)===ruleTarget.value) && (ruleStatus.value==='all' || rule.enabled===(ruleStatus.value==='enabled')) && [rule.name,rule.key,rule.condition?.metric,targetLabel(rule)].join(' ').toLowerCase().includes(String(ruleSearch.value || '').toLowerCase())))
 const form = ref<any>(freshRule())
 const integrationForm = ref<any>({name: '', kind: 'gcp', workspace_id: '', enabled: true, reminder_seconds: 900})
 let generation = 0, formGeneration = 0
@@ -32,12 +68,12 @@ const ruleKey = computed(() => props.route.key || props.route.id || '')
 const options = (values: string[], prefix: string) => values.map(value => ({value, label: t(prefix + value)}))
 const severities = computed(() => options(['info', 'warning', 'critical'], 'alerts.severity.'))
 const scopes = computed(() => options(['workspace', 'server', 'container'], 'alerts.scope.'))
-const targets = computed(() => options(form.value.scope_type === 'container' ? ['container'] : ['server', 'container'], 'alerts.scope.'))
+const targets = computed(() => options(['server','container'],'alerts.scope.'))
 const scopeChoices = computed(() => alertTargetChoices(inventory.value, form.value.scope_type))
 const filteredScopeChoices = computed(() => filterAlertTargets(scopeChoices.value, targetFilters.value, targetSearch.value))
 const selectedTarget = computed(() => scopeChoices.value.find(row => row.value === form.value.scope_id))
 const hasTargetFilters = computed(() => Object.values(targetFilters.value).some(Boolean))
-const targetHelp = computed(() => t(`alerts.applies.${form.value.scope_type}.${form.value.target_type}`))
+const targetHelp = computed(() => t('alerts.typeCoverageHelp'))
 const targetFilterFields = computed< (keyof TargetFilters)[] >(() => form.value.scope_type === 'workspace' ? ['provider'] : form.value.scope_type === 'server' ? ['workspace', 'type', 'os'] : ['workspace', 'server', 'project'])
 const workspaceChoices = computed(() => inventory.value.workspace.map(row => ({value: row.id, label: inventoryLabel(row)})))
 const availableMetrics = computed(() => metrics.value.filter(metric => metric.target_type === form.value.target_type))
@@ -50,8 +86,10 @@ const operatorOptions = computed(() => (metric.value?.operators || ['gt']).map(v
 const valueOptions = computed(() => (metric.value?.values || []).map(value => ({value, label: t('alerts.value.' + value)})))
 const columns = computed(()=>leadingRowActions([
   {name:'name', label:t('alerts.name'), field:'name', align:'left' as const},
-  {name:'target', label:t('alerts.target'), field:'scope_id', align:'left' as const},
+  {name:'target', label:t('alerts.resourceType'), field:'scope_id', align:'left' as const},
   {name:'condition', label:t('alerts.condition'), field:'condition', align:'left' as const},
+  {name:'reminders', label:t('alerts.remindersBySeverity'), field:'reminder_intervals', align:'left' as const},
+  {name:'coverage', label:t('alerts.coverage'), field:'coverage', align:'left' as const},
   {name:'severity', label:t('alerts.severity'), field:'severity', align:'left' as const},
   {name:'enabled', label:t('alerts.status'), field:'enabled', align:'left' as const},
   {name:'actions', label:'', field:'key'},
@@ -80,6 +118,7 @@ const required = (value: any) => !!String(value ?? '').trim() || t('alerts.requi
 const positive = (value: any) => Number.isInteger(Number(value)) && Number(value) >= 60 && Number(value) <= 604800 || t('alerts.reminderRange')
 const nonnegative = (value: any) => Number.isInteger(Number(value)) && Number(value) >= 0 && Number(value) <= 604800 || t('alerts.durationRange')
 function targetLabel(rule: any) {
+  if(rule.model_version===2)return t('alerts.scope.'+rule.target_type)
   return inventoryLabel(inventory.value[rule.scope_type]?.find(row => row.id === rule.scope_id) || {id: rule.scope_id})
 }
 function filterTargets(value: string, update: (callback: () => void) => void) { update(() => { targetSearch.value = value }) }
@@ -100,6 +139,7 @@ function changeTargetFilter(field: keyof TargetFilters) {
 }
 function changeScope() { form.value.scope_id = ''; targetSearch.value = ''; targetFilters.value = emptyTargetFilters(); if (form.value.scope_type === 'container') form.value.target_type = 'container'; changeTarget() }
 function changeTarget() {
+  form.value.exclusions=[];exclusionTarget.value=null;exclusionReason.value=''
   if (!availableMetrics.value.some(row => row.id === form.value.condition.metric)) {
     form.value.condition.metric = availableMetrics.value[0]?.id || ''
     changeMetric()
@@ -108,6 +148,7 @@ function changeTarget() {
 function changeMetric() {
   form.value.condition.operator = metric.value?.operators?.[0] || 'gt'
   form.value.condition.value = metric.value?.values?.[0] ?? (form.value.condition.metric === 'server.no_communication_seconds' ? 900 : 90)
+  if(form.value.condition.metric==='server.no_communication_seconds') {form.value.duration_seconds=0;form.value.severity='critical'}
   preview.value = null
 }
 let contextOrganization = ''
@@ -141,7 +182,7 @@ async function load(force = false) {
     const [catalog, workspaces, servers, containers, projects] = context
     metrics.value = catalog.items
     inventory.value = {workspace: workspaces, server: servers, container: containers, project: projects}
-    if(action==='edit')form.value={...freshRule(),...records,condition:{...records.condition}}
+    if(action==='edit')form.value={...freshRule(),...records,condition:{...records.condition},reminder_intervals:{info:records.reminder_seconds || 1800,warning:records.reminder_seconds || 1800,critical:records.reminder_seconds || 1800,...records.reminder_intervals},exclusions:(records.exclusions || []).map((item:any)=>({...item}))}
     else if(action!=='new') {
       if(section==='integrations')integrations.value=records.items
       else {rules.value=records.items;rulePagination.value.page=1}
@@ -154,12 +195,17 @@ watch([conditionFilterOptions,targetFilterOptionsForRules], () => {
   if(ruleCondition.value && !conditionFilterOptions.value.some(row => row.value===ruleCondition.value))ruleCondition.value=null
   if(ruleTarget.value && !targetFilterOptionsForRules.value.some(row => row.value===ruleTarget.value))ruleTarget.value=null
 }, {flush:'sync'})
-watch(activeOrganization, () => {ruleCondition.value=null;ruleTarget.value=null;rulePagination.value.page=1}, {flush:'sync'})
+watch(activeOrganization, () => {transferIntegration.value=null;migrationPlan.value=null;ruleCondition.value=null;ruleTarget.value=null;rulePagination.value.page=1}, {flush:'sync'})
 watch(form, () => {formGeneration++;preview.value = null}, {deep: true,flush:'sync'})
 watch(() => [form.value.condition.metric,form.value.condition.operator,form.value.severity], () => {if(!criticalEligible.value)delete form.value.condition.critical_value}, {flush:'sync'})
 watch(() => [activeOrganization.value, props.route.action, props.route.key, props.route.id, props.route.section], () => load(), {immediate: true})
 onUnmounted(() => { generation++ })
-function payload() { const condition={...form.value.condition,...(form.value.condition.metric === 'host.disk_percent' ? {disk_path: form.value.condition.disk_path?.trim() || '*'} : {})};if(hasCritical.value)condition.critical_value=Number(condition.critical_value);else delete condition.critical_value;return {...form.value, condition, duration_seconds: Number(form.value.duration_seconds), reminder_seconds: Number(form.value.reminder_seconds)} }
+function payload() {
+  const condition={...form.value.condition,...(form.value.condition.metric==='host.disk_percent'?{disk_path:form.value.condition.disk_path?.trim() || '*'}:{})}
+  if(hasCritical.value)condition.critical_value=Number(condition.critical_value);else delete condition.critical_value
+  const reminder_intervals=Object.fromEntries(reminderBands.value.map(band=>[band,Number(form.value.reminder_intervals[band])]))
+  return {model_version:2,name:form.value.name,enabled:form.value.enabled,severity:form.value.severity,target_type:form.value.target_type,condition,duration_seconds:Number(form.value.duration_seconds),reminder_intervals,exclusions:form.value.exclusions.map((item:any)=>({resource_type:item.resource_type,resource_id:item.resource_id,reason:item.reason}))}
+}
 async function save() {
   if (!props.canEdit || busy.value || loading.value) return
   if (!validateCritical()) return
@@ -167,20 +213,21 @@ async function save() {
   const current = () => org === activeOrganization.value && context === generation && props.canEdit
   busy.value = true; error.value = ''
   try {
-    await alertsApi.saveRule(props.route.action === 'edit' ? ruleKey.value : form.value.key, payload())
+    await alertsApi.saveRule(props.route.action === 'edit' ? ruleKey.value : form.value.key || 'rule-'+globalThis.crypto.randomUUID(), payload(), form.value.edit_version || 0)
     if (!current()) return
     q.notify({type: 'positive', message: t('alerts.saved')}); window.location.hash = '#/alerts'
   } catch { if (current()) error.value = t('alerts.saveError') }
   finally { busy.value = false }
 }
-async function simulate() {
+async function simulatePage(page = 1) {
   if(loading.value || busy.value)return
   if(!validateCritical())return
   const version = generation, fields = formGeneration; busy.value = true; error.value = ''
-  try { const result = await alertsApi.simulate(payload()); if (version === generation && fields === formGeneration) preview.value = result }
+  try { const result = await alertsApi.simulate(payload(),page); if (version === generation && fields === formGeneration) preview.value = result }
   catch { if (version === generation) error.value = t('alerts.previewError') }
   finally { busy.value = false }
 }
+function simulate() {return simulatePage(1)}
 function archive(rule: any) {
   if (!props.canEdit || busy.value) return
   const org = activeOrganization.value, context = generation, key = rule.key
@@ -188,7 +235,7 @@ function archive(rule: any) {
   q.dialog({title: t('alerts.archive'), message: t('alerts.archiveConfirm'), cancel: true, persistent: true}).onOk(async () => {
     if (!current() || busy.value) return
     busy.value = true
-    try { await alertsApi.archiveRule(key); if (current()) await load() }
+    try { await alertsApi.archiveRule(key,rule.edit_version); if (current()) await load() }
     catch { if (current()) error.value = t('alerts.saveError') }
     finally { busy.value = false }
   })
@@ -254,18 +301,17 @@ async function copySecret() {
       <q-form v-if="editing && (route.action==='new' || !loading)" @submit="save">
         <section class="monitoring-form-section">
           <div class="row q-col-gutter-md"><q-input v-model="form.name" outlined class="col-12 col-md-8" :label="t('alerts.name')" :rules="[required]" maxlength="160"/><q-select v-model="form.severity" outlined class="col-12 col-md-4" :options="severities" emit-value map-options :label="t('alerts.severity')"/></div>
-          <q-input v-model="form.key" outlined class="q-mt-sm" :disable="route.action==='edit'" :label="t('alerts.key')" :hint="t('alerts.keyHelp')" :rules="[required, value => /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(value) || t('alerts.keyHelp')]" maxlength="80"/>
+
         </section>
         <section class="monitoring-form-section">
           <h2>{{t('alerts.where')}}</h2>
-          <div class="row q-col-gutter-md"><q-select v-model="form.scope_type" outlined class="col-12 col-md-4" :options="scopes" emit-value map-options :label="t('alerts.scope')" @update:model-value="changeScope"/><q-select v-model="form.scope_id" class="col-12 col-md-8" outlined use-input fill-input hide-selected input-debounce="0" :options="filteredScopeChoices" emit-value map-options :display-value="selectedTarget?.label || ''" :label="t('alerts.scope.'+form.scope_type)" :hint="t('alerts.searchTargetHelp')" :rules="[required]" @filter="filterTargets"><template #option="slot"><q-item v-bind="slot.itemProps"><q-item-section><q-item-label>{{slot.opt.label}}</q-item-label><q-item-label v-if="slot.opt.description" caption>{{slot.opt.description}}</q-item-label></q-item-section></q-item></template><template #no-option><q-item><q-item-section>{{t('alerts.noTargets')}}</q-item-section></q-item></template></q-select></div>
-          <q-expansion-item dense icon="filter_list" :label="t('alerts.findTarget')" class="target-refinements"><div class="q-pa-md"><div class="row q-col-gutter-sm"><q-select v-for="field in targetFilterFields" :key="field" v-model="targetFilters[field]" outlined dense clearable emit-value map-options class="col-12 col-sm" :options="targetFilterOptions(field)" :label="t('alerts.find.'+field)" @update:model-value="changeTargetFilter(field)"/></div><p class="q-mb-none q-mt-sm">{{t('alerts.findTargetHelp')}}</p><q-btn v-if="hasTargetFilters" flat dense no-caps :label="t('alerts.clearTargetFilters')" @click="targetFilters=emptyTargetFilters();targetSearch=''"/></div></q-expansion-item>
-          <div v-if="selectedTarget" class="selected-target"><q-icon name="check_circle" color="positive" size="17px"/><span>{{selectedTarget.label}}<small>{{selectedTarget.description}}</small></span></div>
+          <q-select v-model="form.target_type" outlined :options="targets" emit-value map-options :label="t('alerts.resourceType')" @update:model-value="changeTarget"/>
+          <p>{{targetHelp}}</p>
+          <q-banner v-if="route.action==='edit' && form.model_version!==2" class="bg-orange-1">{{t('alerts.legacyRuleHelp')}}</q-banner>
         </section>
         <section class="monitoring-form-section">
           <h2>{{t('alerts.evaluate')}}</h2>
-          <div class="row q-col-gutter-md"><q-select v-if="targets.length>1" v-model="form.target_type" outlined class="col-12 col-md-4" :options="targets" emit-value map-options :label="t('alerts.evaluate')" @update:model-value="changeTarget"/><q-select v-model="form.condition.metric" outlined class="col-12" :class="targets.length>1?'col-md-8':''" :options="metricOptions" emit-value map-options :label="t('alerts.metric')" :rules="[required]" @update:model-value="changeMetric"/></div>
-          <p>{{targetHelp}}</p>
+          <div class="row q-col-gutter-md"><q-select v-model="form.condition.metric" outlined class="col-12"  :options="metricOptions" emit-value map-options :label="t('alerts.metric')" :rules="[required]" @update:model-value="changeMetric"/></div>
           <div class="row q-col-gutter-md"><q-select v-model="form.condition.operator" outlined class="col-12 col-md-6" :options="operatorOptions" emit-value map-options :label="t('alerts.operator')"/><q-select v-if="valueOptions.length" v-model="form.condition.value" outlined class="col-12 col-md-6" :options="valueOptions" emit-value map-options :label="t('alerts.value')"/><q-input v-else v-model.number="form.condition.value" outlined class="col-12 col-md-6" type="number" step="any" :label="t('alerts.value')" :suffix="metric?.unit==='seconds'?t('alerts.unit.seconds'):metric?.unit" :rules="[value => value !== '' && Number.isFinite(Number(value)) || t('alerts.required')]"/></div>
           <q-input v-if="criticalEligible && (criticalSupported || hasCritical)" v-model.number="form.condition.critical_value" outlined clearable class="q-mt-md" type="number" step="any" max="100" suffix="%" :label="t('alerts.criticalThreshold')" :hint="t(['host.cpu_percent','host.memory_percent'].includes(form.condition.metric)&&hasCritical?'alerts.timedCriticalHelp':'alerts.criticalHelp')" :rules="[criticalThreshold]"/>
           <q-banner v-if="hasCritical && !criticalSupported" class="q-mt-md" role="alert">{{t('alerts.criticalUnsupported')}}</q-banner>
@@ -273,19 +319,30 @@ async function copySecret() {
           <p v-if="form.condition.metric==='server.no_communication_seconds'">{{t('alerts.communicationHelp')}}</p><q-input v-if="form.condition.metric==='host.disk_percent'" v-model="form.condition.disk_path" outlined class="q-mt-md" :label="t('alerts.diskPath')" :hint="t('alerts.anyDisk')"/>
         </section>
         <section class="monitoring-form-section">
-          <div class="row q-col-gutter-md"><q-input v-model.number="form.duration_seconds" outlined class="col-12 col-md-6" type="number" min="0" :label="t('alerts.duration')" :hint="t(['host.cpu_percent','host.memory_percent'].includes(form.condition.metric)&&hasCritical?'alerts.timedDurationHelp':'alerts.durationHelp')" :rules="[nonnegative]"/><q-input v-model.number="form.reminder_seconds" outlined class="col-12 col-md-6" type="number" min="60" max="604800" :label="t('alerts.reminder')" :rules="[positive]"/></div><q-toggle v-model="form.enabled" :label="t('alerts.enabled')"/><p class="q-mb-none q-mt-sm">{{t('alerts.ruleHelp')}}</p>
+          <q-input v-model.number="form.duration_seconds" outlined type="number" min="0" :label="t('alerts.duration')" :hint="t(['host.cpu_percent','host.memory_percent'].includes(form.condition.metric)&&hasCritical?'alerts.timedDurationHelp':'alerts.durationHelp')" :rules="[nonnegative]"/>
+          <div class="row q-col-gutter-md q-mt-sm"><q-input v-for="band in reminderBands" :key="band" :model-value="form.reminder_intervals[band]/60" @update:model-value="value=>form.reminder_intervals[band]=Number(value)*60" outlined class="col-12 col-md-6" type="number" step="any" min="1" max="10080" :label="t('alerts.reminderMinutes')+' · '+t('alerts.severity.'+band)" :suffix="t('alerts.minutes')" :rules="[value=>positive(Number(value)*60)===true || t('alerts.reminderMinutesRange')]"/></div>
+          <q-toggle v-model="form.enabled" :label="t('alerts.enabled')"/><p class="q-mb-none q-mt-sm">{{t('alerts.ruleHelp')}}</p>
         </section>
-        <div class="monitoring-form-actions"><q-btn flat no-caps :label="t('alerts.cancel')" href="#/alerts"/><q-btn outline no-caps :label="t('alerts.preview')" :loading="busy" :disable="loading" @click="simulate"/><q-btn v-if="canEdit" type="submit" color="primary" unelevated no-caps :label="t(route.action==='new' ? 'alerts.newRule' : 'alerts.save')" :loading="busy" :disable="loading"/></div>
-        <section v-if="preview" class="monitoring-form-section preview-panel"><h2>{{t('alerts.previewTitle')}} · {{preview.totalItems}}</h2><p>{{t('alerts.previewHelp')}}</p><p v-if="hasCritical">{{conditionLabel(form)}}</p><q-list separator><q-item v-for="item in preview.items" :key="item.resource_type+item.resource_id"><q-item-section>{{item.resource_name || item.resource_id}}</q-item-section><q-item-section side><q-badge :color="previewColor(item.result)">{{t('alerts.result.'+String(item.result))}}</q-badge><q-badge v-if="item.severity" outline :color="severityColor(item.severity)">{{t('alerts.severity.'+item.severity)}}</q-badge><span class="text-caption">{{item.value ?? '—'}}</span></q-item-section></q-item></q-list></section>
+        <section class="monitoring-form-section">
+          <h2>{{t('alerts.exclusions')}}</h2><p>{{t('alerts.exclusionsHelp')}}</p>
+          <div class="row q-col-gutter-md"><q-select v-model="exclusionTarget" outlined use-input emit-value map-options class="col-12 col-md-6" :options="exclusionChoices" :label="t('alerts.resource')" @filter="filterExclusions"><template #option="slot"><q-item v-bind="slot.itemProps"><q-item-section><q-item-label>{{slot.opt.label}}</q-item-label><q-item-label caption>{{slot.opt.description}}</q-item-label></q-item-section></q-item></template></q-select><q-input v-model="exclusionReason" outlined class="col-12 col-md-6" maxlength="1024" :label="t('alerts.exclusionReason')"/></div>
+          <q-btn class="q-mt-sm" outline no-caps :label="t('alerts.addExclusion')" :disable="!exclusionTarget || !exclusionReason.trim()" @click="addExclusion"/>
+          <q-list separator><q-item v-for="item in form.exclusions" :key="item.resource_id"><q-item-section><q-item-label>{{item.resource_name || item.resource_id}}</q-item-label><q-item-label caption>{{item.reason}}</q-item-label><q-item-label v-if="item.created" caption>{{item.actor}} · {{item.created}}</q-item-label></q-item-section><q-item-section side><q-btn flat round icon="close" :aria-label="t('alerts.removeExclusion')" @click="form.exclusions=form.exclusions.filter((entry:any)=>entry.resource_id!==item.resource_id)"/></q-item-section></q-item></q-list>
+        </section>
+        <div class="monitoring-form-actions"><q-btn flat no-caps :label="t('alerts.cancel')" href="#/alerts"/><q-btn outline no-caps :label="t('alerts.preview')" :loading="busy" :disable="loading" @click="simulate"/><q-btn v-if="canEdit" type="submit" color="primary" unelevated no-caps :label="t(route.action==='new' ? 'alerts.newRule' : 'alerts.save')" :loading="busy" :disable="loading || (route.action==='edit' && form.model_version!==2)"/></div>
+        <section v-if="preview" class="monitoring-form-section preview-panel"><h2>{{t('alerts.previewTitle')}} · {{preview.totalItems}}</h2><p>{{t('alerts.previewHelp')}}</p><p v-if="preview.coverage">{{t('alerts.coverage')}}: {{preview.coverage.included}} · {{t('alerts.exclusions')}}: {{preview.coverage.excluded}} · {{t('alerts.result.unknown')}}: {{preview.coverage.unknown}}</p><q-pagination v-if="preview.totalPages>1" :model-value="preview.page" :max="preview.totalPages" @update:model-value="page=>simulatePage(page)"/><p v-if="hasCritical">{{conditionLabel(form)}}</p><q-list separator><q-item v-for="item in preview.items" :key="item.resource_type+item.resource_id"><q-item-section>{{item.resource_name || item.resource_id}}</q-item-section><q-item-section side><q-badge :color="previewColor(item.result)">{{t('alerts.result.'+String(item.result))}}</q-badge><q-badge v-if="item.severity" outline :color="severityColor(item.severity)">{{t('alerts.severity.'+item.severity)}}</q-badge><span class="text-caption">{{item.value ?? '—'}}</span></q-item-section></q-item></q-list></section>
       </q-form>
       <q-card-section v-else-if="editing && loading" class="q-pa-xl text-center"><q-spinner color="primary" size="32px" :aria-label="t('Loading')"/><p>{{t('Loading')}}</p></q-card-section>
       <template v-else-if="!editing && tab==='rules'">
+        <q-banner v-if="legacyRules" class="q-ma-md bg-orange-1">{{t('alerts.legacyRuleHelp')}}<template #action><q-btn v-if="canEdit" flat no-caps :label="t('alerts.previewMigration')" :loading="busy" @click="previewMigration"/></template></q-banner>
         <div class="monitoring-toolbar rule-list-toolbar"><q-input v-model="ruleSearch" outlined dense clearable :placeholder="t('alerts.search')" :aria-label="t('alerts.search')" class="monitoring-search"><template #prepend><q-icon name="search" size="20px"/></template></q-input><q-select v-model="ruleCondition" outlined dense clearable emit-value map-options :label="t('alerts.condition')" :display-value="ruleCondition ? undefined : t('alerts.allConditions')" :options="conditionFilterOptions" class="monitoring-filter"/><q-select v-model="ruleTarget" outlined dense clearable emit-value map-options :label="t('alerts.target')" :display-value="ruleTarget ? undefined : t('alerts.allTargets')" :options="targetFilterOptionsForRules" class="monitoring-filter"/><q-select v-model="ruleStatus" outlined dense emit-value map-options :label="t('alerts.status')" :options="[{value:'all',label:t('incidents.status.all')},{value:'enabled',label:t('alerts.enabled')},{value:'disabled',label:t('alerts.disabled')}]" class="monitoring-filter"/><div class="monitoring-toolbar-actions"><PageActions :actions="ruleActions"/></div></div>
         <q-table class="inventory-table monitoring-table" flat :grid="q.screen.lt.md" :rows="filteredRules" :columns="columns" row-key="key" :loading="loading" v-model:pagination="rulePagination" :rows-per-page-options="[10,25,50,100]" :no-data-label="rules.length && (ruleSearch || ruleCondition || ruleTarget || ruleStatus!=='all') ? t('No results for this search') : t('alerts.emptyRules')">
           <template #body-cell-actions="slot"><q-td :props="slot"><div class="monitoring-row-actions"><q-btn flat round dense :icon="canEdit?'edit':'visibility'" :aria-label="t(canEdit?'alerts.edit':'alerts.inspect')" :href="`#/alerts/${encodeURIComponent(slot.row.key)}/edit`"><q-tooltip>{{t(canEdit?'alerts.edit':'alerts.inspect')}}</q-tooltip></q-btn><q-btn v-if="canEdit" flat round dense color="negative" icon="archive" :aria-label="t('alerts.archive')" @click="archive(slot.row)"><q-tooltip>{{t('alerts.archive')}}</q-tooltip></q-btn></div></q-td></template>
-          <template #body-cell-name="slot"><q-td :props="slot"><a class="monitoring-primary" :href="`#/alerts/${encodeURIComponent(slot.row.key)}/edit`">{{slot.row.name}}</a><div class="monitoring-secondary rule-key" :title="slot.row.key">{{slot.row.key}}</div></q-td></template>
-          <template #body-cell-target="slot"><q-td :props="slot"><div>{{targetLabel(slot.row)}}</div><div class="monitoring-secondary">{{t('alerts.scope.'+slot.row.scope_type)}}<template v-if="slot.row.scope_type!==slot.row.target_type"> · {{t('alerts.scope.'+slot.row.target_type)}}</template></div></q-td></template>
-          <template #body-cell-condition="slot"><q-td :props="slot"><div>{{t('alerts.metric.'+slot.row.condition.metric)}}</div><div class="monitoring-secondary">{{conditionLabel(slot.row)}}</div></q-td></template>
+          <template #body-cell-name="slot"><q-td :props="slot" class="rule-name-cell"><a class="monitoring-primary" :href="`#/alerts/${encodeURIComponent(slot.row.key)}/edit`">{{slot.row.name}}</a><div v-if="slot.row.model_version!==2" class="monitoring-secondary rule-key" :title="slot.row.key">{{slot.row.key}}</div></q-td></template>
+          <template #body-cell-target="slot"><q-td :props="slot" class="rule-type-cell"><div>{{targetLabel(slot.row)}}</div><div v-if="slot.row.model_version!==2" class="monitoring-secondary">{{t('alerts.scope.'+slot.row.scope_type)}}<template v-if="slot.row.model_version!==2 && slot.row.scope_type!==slot.row.target_type"> · {{t('alerts.scope.'+slot.row.target_type)}}</template></div></q-td></template>
+          <template #body-cell-condition="slot"><q-td :props="slot" class="rule-condition-cell"><div>{{t('alerts.metric.'+slot.row.condition.metric)}}</div><div class="monitoring-secondary">{{conditionLabel(slot.row)}}</div></q-td></template>
+          <template #body-cell-reminders="slot"><q-td :props="slot" class="rule-reminders-cell">{{reminderLabel(slot.row)}}</q-td></template>
+          <template #body-cell-coverage="slot"><q-td :props="slot" class="rule-coverage-cell"><div>{{slot.row.coverage?.included ?? '—'}} / {{slot.row.coverage?.total ?? '—'}}</div><div v-if="slot.row.exclusions?.length" class="monitoring-secondary">{{slot.row.exclusions.length}} {{t('alerts.excluded')}}</div></q-td></template>
           <template #body-cell-severity="slot"><q-td :props="slot"><span class="monitoring-status" :class="'severity-'+slot.row.severity">{{severityLabel(slot.row)}}</span></q-td></template>
           <template #body-cell-enabled="slot"><q-td :props="slot"><span class="monitoring-status" :class="slot.row.enabled?'status-enabled':'status-disabled'"><q-icon :name="slot.row.enabled?'check_circle':'pause_circle'" size="14px"/>{{t(slot.row.enabled?'alerts.enabled':'alerts.disabled')}}</span></q-td></template>
           <template #item="slot"><q-card flat bordered class="monitoring-mobile-card"><q-card-section><div class="row items-start no-wrap q-gutter-sm"><div class="col"><a class="monitoring-primary" :href="`#/alerts/${encodeURIComponent(slot.row.key)}/edit`">{{slot.row.name}}</a><div class="monitoring-secondary">{{slot.row.key}}</div></div><q-btn flat round dense icon="more_horiz" :aria-label="t('alerts.actions')"><q-menu><q-list><q-item clickable v-close-popup :href="`#/alerts/${encodeURIComponent(slot.row.key)}/edit`"><q-item-section>{{t(canEdit?'alerts.edit':'alerts.inspect')}}</q-item-section></q-item><q-item v-if="canEdit" clickable v-close-popup @click="archive(slot.row)"><q-item-section class="text-negative">{{t('alerts.archive')}}</q-item-section></q-item></q-list></q-menu></q-btn></div><div class="row items-center q-gutter-sm q-mt-sm"><span class="monitoring-status" :class="'severity-'+slot.row.severity">{{severityLabel(slot.row)}}</span><span class="monitoring-status" :class="slot.row.enabled?'status-enabled':'status-disabled'">{{t(slot.row.enabled?'alerts.enabled':'alerts.disabled')}}</span></div><div class="monitoring-mobile-details"><div><small>{{t('alerts.target')}}</small>{{targetLabel(slot.row)}}</div><div><small>{{t('alerts.condition')}}</small>{{t('alerts.metric.'+slot.row.condition.metric)}}<div class="monitoring-secondary">{{conditionLabel(slot.row)}}</div></div></div></q-card-section></q-card></template>
@@ -294,11 +351,13 @@ async function copySecret() {
       <template v-else-if="!editing">
         <div class="monitoring-toolbar"><q-input v-model="integrationSearch" outlined dense clearable :placeholder="t('Search')" :aria-label="t('Search')" class="monitoring-search"><template #prepend><q-icon name="search" size="20px"/></template></q-input><div class="monitoring-toolbar-actions"><PageActions :actions="integrationActions"/></div></div>
         <q-banner v-if="secret" class="integration-secret"><strong>{{t('alerts.secretOnce')}}</strong><q-input :key="q.screen.width" :model-value="secret" outlined readonly type="textarea" autogrow class="q-mt-md" :label="t('alerts.secret')"/><div class="row q-gutter-sm q-mt-sm"><q-btn flat no-caps icon="content_copy" :label="t('alerts.copy')" @click="copySecret"/><q-btn flat no-caps :label="t('alerts.dismiss')" @click="secret='';secretIntegration=null"/></div><p v-if="secretIntegration?.id" class="q-mb-none">{{t('alerts.username')}}: {{secretIntegration.id}}</p></q-banner>
-        <section v-for="row in filteredIntegrations" :key="row.id" class="integration-record"><div class="integration-record-heading"><div v-if="canEdit && !q.screen.lt.md" class="monitoring-row-actions"><q-btn flat round dense icon="edit" :aria-label="t('alerts.edit')" @click="openIntegration(row)"><q-tooltip>{{t('alerts.edit')}}</q-tooltip></q-btn><q-btn flat round dense icon="vpn_key" :aria-label="t('alerts.rotate')" :disable="!row.enabled" @click="integrationAction(row,true)"><q-tooltip>{{t('alerts.rotate')}}</q-tooltip></q-btn><q-btn flat round dense color="negative" icon="block" :aria-label="t('alerts.revoke')" @click="integrationAction(row,false)"><q-tooltip>{{t('alerts.revoke')}}</q-tooltip></q-btn></div><div class="integration-identity"><h2>{{row.name}}</h2><div class="monitoring-secondary">{{row.kind==='gcp'?t('alerts.gcp'):t('alerts.generic')}}</div></div><span class="monitoring-status" :class="row.enabled?'status-enabled':'status-disabled'">{{t(row.enabled?'alerts.enabled':'alerts.disabled')}}</span><q-btn v-if="canEdit && q.screen.lt.md" flat round dense icon="more_horiz" :aria-label="t('alerts.actions')"><q-menu><q-list><q-item clickable v-close-popup @click="openIntegration(row)"><q-item-section>{{t('alerts.edit')}}</q-item-section></q-item><q-item clickable v-close-popup :disable="!row.enabled" @click="integrationAction(row,true)"><q-item-section>{{t('alerts.rotate')}}</q-item-section></q-item><q-item clickable v-close-popup @click="integrationAction(row,false)"><q-item-section class="text-negative">{{t('alerts.revoke')}}</q-item-section></q-item></q-list></q-menu></q-btn></div><q-expansion-item dense :label="t('incidents.details')" class="integration-details"><div class="q-pa-md"><p class="monitoring-secondary">{{t(row.kind==='gcp'?'alerts.gcpInstructions':'alerts.genericInstructions')}}</p><q-input outlined readonly dense autogrow type="textarea" :model-value="integrationEndpoint(row)" :label="t('alerts.target')"/><div class="monitoring-secondary q-mt-sm">{{t('alerts.username')}}: {{row.id}}</div><div class="monitoring-secondary">{{t('alerts.reminder')}}: {{row.reminder_seconds}}</div><q-expansion-item dense :label="t('alerts.lastReceipt')" class="q-mt-md"><div v-if="row.last_received_at" class="q-pa-md"><div class="monitoring-secondary">{{new Date(row.last_received_at.replace(' ','T')).toLocaleString(locale)}}</div><pre class="evidence">{{JSON.stringify(row.last_event || {}, null, 2)}}</pre></div><p v-else class="monitoring-secondary q-pa-md">{{t('alerts.noReceipt')}}</p></q-expansion-item></div></q-expansion-item></section>
+        <section v-for="row in filteredIntegrations" :key="row.id" class="integration-record"><div class="integration-record-heading"><div v-if="canEdit && !q.screen.lt.md" class="monitoring-row-actions"><q-btn flat round dense icon="edit" :aria-label="t('alerts.edit')" @click="openIntegration(row)"><q-tooltip>{{t('alerts.edit')}}</q-tooltip></q-btn><q-btn v-if="transferAvailable" flat round dense icon="drive_file_move" :aria-label="t('alerts.transferIntegration')" @click="transferIntegration=row"><q-tooltip>{{t('alerts.transferIntegration')}}</q-tooltip></q-btn><q-btn flat round dense icon="vpn_key" :aria-label="t('alerts.rotate')" :disable="!row.enabled" @click="integrationAction(row,true)"><q-tooltip>{{t('alerts.rotate')}}</q-tooltip></q-btn><q-btn flat round dense color="negative" icon="block" :aria-label="t('alerts.revoke')" @click="integrationAction(row,false)"><q-tooltip>{{t('alerts.revoke')}}</q-tooltip></q-btn></div><div class="integration-identity"><h2>{{row.name}}</h2><div class="monitoring-secondary">{{row.kind==='gcp'?t('alerts.gcp'):t('alerts.generic')}}</div></div><span class="monitoring-status" :class="row.enabled?'status-enabled':'status-disabled'">{{t(row.enabled?'alerts.enabled':'alerts.disabled')}}</span><q-btn v-if="canEdit && q.screen.lt.md" flat round dense icon="more_horiz" :aria-label="t('alerts.actions')"><q-menu><q-list><q-item clickable v-close-popup @click="openIntegration(row)"><q-item-section>{{t('alerts.edit')}}</q-item-section></q-item><q-item v-if="transferAvailable" clickable v-close-popup @click="transferIntegration=row"><q-item-section>{{t('alerts.transferIntegration')}}</q-item-section></q-item><q-item clickable v-close-popup :disable="!row.enabled" @click="integrationAction(row,true)"><q-item-section>{{t('alerts.rotate')}}</q-item-section></q-item><q-item clickable v-close-popup @click="integrationAction(row,false)"><q-item-section class="text-negative">{{t('alerts.revoke')}}</q-item-section></q-item></q-list></q-menu></q-btn></div><q-expansion-item dense :label="t('incidents.details')" class="integration-details"><div class="q-pa-md"><p class="monitoring-secondary">{{t(row.kind==='gcp'?'alerts.gcpInstructions':'alerts.genericInstructions')}}</p><q-input outlined readonly dense autogrow type="textarea" :model-value="integrationEndpoint(row)" :label="t('alerts.target')"/><div class="monitoring-secondary q-mt-sm">{{t('alerts.username')}}: {{row.id}}</div><div class="monitoring-secondary">{{t('alerts.reminder')}}: {{row.reminder_seconds}}</div><q-expansion-item dense :label="t('alerts.lastReceipt')" class="q-mt-md"><div v-if="row.last_received_at" class="q-pa-md"><div class="monitoring-secondary">{{new Date(row.last_received_at.replace(' ','T')).toLocaleString(locale)}}</div><pre class="evidence">{{JSON.stringify(row.last_event || {}, null, 2)}}</pre></div><p v-else class="monitoring-secondary q-pa-md">{{t('alerts.noReceipt')}}</p></q-expansion-item></div></q-expansion-item></section>
         <div v-if="!filteredIntegrations.length && !loading" class="empty-state"><q-icon name="notifications_none" size="32px"/><p>{{t(integrationSearch?'No results for this search':'alerts.emptyIntegrations')}}</p></div>
       </template>
     </q-card>
+    <q-dialog :model-value="!!migrationPlan" @update:model-value="value=>{if(!value)migrationPlan=null}"><q-card style="width:900px;max-width:95vw"><q-card-section><h2>{{t('alerts.previewMigration')}}</h2><p>{{migrationPlan?.source_count}} → {{migrationPlan?.destination_count}}</p><p>{{t('alerts.migrationHelp')}}</p><div class="row q-col-gutter-sm"><q-select v-model="migrationMetric" outlined class="col-12 col-md-4" emit-value map-options :options="migrationMetricChoices" :label="t('alerts.condition')" @update:model-value="migrationTarget=null"/><q-select v-model="migrationTarget" outlined class="col-12 col-md-4" emit-value map-options :options="migrationTargetChoices" :label="t('alerts.resource')"/><q-input v-model="migrationReason" outlined class="col-12 col-md-4" maxlength="1024" :label="t('alerts.exclusionReason')"/></div><q-btn class="q-my-sm" outline :label="t('alerts.addExclusion')" :disable="!migrationTarget || !migrationReason.trim() || busy" @click="updateMigrationExclusion()"/><q-list separator><q-item v-for="item in migrationPlan?.items" :key="item.key"><q-item-section><q-item-label>{{item.rule.name}} · {{t('alerts.scope.'+item.rule.target_type)}} · {{t(item.rule.enabled?'alerts.enabled':'alerts.disabled')}}</q-item-label><q-item-label caption>{{conditionLabel(item.rule)}} · {{reminderLabel(item.rule)}}</q-item-label><q-item-label caption>{{t('alerts.coverage')}}: {{item.coverage.total}} · {{t('alerts.newResources')}}: {{item.coverage.new_resources.length}} · {{t('alerts.exclusions')}}: {{item.rule.exclusions.length}} · {{t('incidents.title')}}: {{item.open_incidents.length}}</q-item-label><q-item-label v-for="excluded in item.rule.exclusions" :key="excluded.resource_id" caption>{{migrationTargetChoices.find((target:any)=>target.value===excluded.resource_id)?.label || excluded.resource_id}} · {{excluded.reason}}<q-btn flat round dense icon="close" :aria-label="t('alerts.removeExclusion')" @click="updateMigrationExclusion(excluded.resource_id,item.rule.condition.metric)"/></q-item-label><q-expansion-item v-if="item.coverage.new_resources.length" dense :label="t('alerts.newResources')"><q-list><q-item v-for="resource in item.coverage.new_resources" :key="resource.resource_id"><q-item-section>{{resource.resource_name || resource.resource_id}}</q-item-section></q-item></q-list></q-expansion-item></q-item-section></q-item></q-list><p v-for="(conflict,index) in migrationPlan?.conflicts" :key="index" class="text-negative">{{conflict.metric}}: {{conflict.reason}}</p></q-card-section><q-card-actions align="right"><q-btn flat :label="t('alerts.cancel')" @click="migrationPlan=null"/><q-btn color="primary" :label="t('alerts.applyMigration')" :disable="!migrationPlan?.can_apply" :loading="busy" @click="applyMigration"/></q-card-actions></q-card></q-dialog>
     <q-dialog v-model="integrationDialog"><q-card class="integration-dialog"><q-form @submit="saveIntegration"><q-card-section><h2 class="text-h6 q-ma-none">{{t(integrationEdit?'alerts.editIntegration':'alerts.newIntegration')}}</h2></q-card-section><q-card-section class="q-gutter-y-md"><q-input v-model="integrationForm.name" outlined :label="t('alerts.name')" :rules="[required]"/><div class="row q-col-gutter-md"><q-select v-model="integrationForm.kind" :disable="!!integrationEdit" outlined emit-value map-options class="col-12 col-sm-6" :label="t('alerts.integrationKind')" :options="[{value:'gcp',label:t('alerts.gcp')},{value:'generic',label:t('alerts.generic')}]"/><q-select v-model="integrationForm.workspace_id" :disable="!!integrationEdit" outlined clearable emit-value map-options class="col-12 col-sm-6" :options="workspaceChoices" :label="t('alerts.optionalWorkspace')"/></div><q-input v-model.number="integrationForm.reminder_seconds" outlined type="number" min="60" max="604800" :label="t('alerts.reminder')" :rules="[positive]"/><q-toggle v-model="integrationForm.enabled" :label="t('alerts.enabled')"/></q-card-section><q-card-actions align="right" class="q-pa-md"><q-btn flat no-caps :label="t('alerts.cancel')" v-close-popup/><q-btn color="primary" unelevated no-caps type="submit" :label="t('alerts.save')" :loading="busy"/></q-card-actions></q-form></q-card></q-dialog>
+    <IntegrationTransferDialog v-if="transferIntegration" :key="transferIntegration.id" :integration="transferIntegration" @close="transferIntegration=null" @transferred="load(true)"/>
   </q-page>
 </template>
 <style scoped>
@@ -307,4 +366,13 @@ async function copySecret() {
 .rule-key{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.target-refinements{margin-top:12px;border:1px solid rgba(127,127,127,.16);border-radius:8px}.selected-target{display:flex;align-items:flex-start;gap:8px;margin-top:16px;font-size:13px}.selected-target small{display:block;color:var(--i7y-muted,#71717a);font-size:12px;line-height:20px}.selected-target .q-icon{margin-top:2px}.preview-panel{background:rgba(127,127,127,.035)}.severity-critical{color:var(--q-negative);background:rgba(239,68,68,.09)}.severity-warning{color:#a16207;background:rgba(234,179,8,.12)}.severity-info{color:var(--q-primary);background:rgba(79,70,229,.08)}.status-enabled{color:#15803d;background:rgba(34,197,94,.09)}.status-disabled{color:var(--i7y-muted,#71717a)}.integration-record{padding:20px 24px;border-bottom:1px solid rgba(127,127,127,.16)}.integration-record:last-child{border-bottom:0}.integration-record-heading{display:flex;align-items:center;gap:16px;min-width:0}.integration-identity{flex:1;min-width:0}.integration-identity h2{font-size:14px;font-weight:500;line-height:21px;margin:0;overflow-wrap:anywhere}.integration-details{margin:16px 0 0 120px;border:1px solid rgba(127,127,127,.16);border-radius:8px}.integration-secret{padding:24px;background:rgba(79,70,229,.06);border-bottom:1px solid rgba(127,127,127,.16)}.integration-dialog{width:640px;max-width:calc(100vw - 32px)}.evidence{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.7;max-height:280px;overflow:auto}.empty-state p{font-size:14px;line-height:22px;color:var(--i7y-muted,#71717a)}
 :global(.body--dark) .status-enabled{color:#86efac}:global(.body--dark) .severity-warning{color:#fde047}:global(.body--dark) .severity-info{color:#a5b4fc}:global(.body--dark) .selected-target small{color:#a1a1aa}
 @media(max-width:1023px){.integration-details{margin-left:0}.integration-record{padding:16px}.integration-record-heading{flex-wrap:wrap;gap:10px}.integration-identity{flex:1 1 calc(100% - 50px)}.integration-record-heading>.monitoring-status{order:3}.integration-secret{padding:16px}}
+</style>
+
+<style scoped>
+.rule-name-cell{min-width:130px;white-space:normal;word-break:normal;overflow-wrap:normal}
+.rule-name-cell .monitoring-primary{word-break:normal;overflow-wrap:normal}
+.rule-type-cell{min-width:75px}
+.rule-condition-cell{min-width:250px;max-width:350px}
+.rule-reminders-cell{min-width:175px}
+.rule-coverage-cell{min-width:95px}
 </style>
