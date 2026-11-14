@@ -6,6 +6,6 @@ function href(serverId:string){return `#/servers/${encodeURIComponent(serverId)}
 </script>
 <template>
   <q-btn v-if="desktopRuntime" flat dense round icon="play_circle" :aria-label="t('Actions')" :title="t('Actions')" aria-haspopup="menu" @click.stop>
-    <q-menu anchor="bottom left" self="top left"><q-list><q-item clickable v-close-popup :href="href(serverId)"><q-item-section avatar><q-icon name="network_check"/></q-item-section><q-item-section>{{t('Ansible ping')}}</q-item-section></q-item></q-list></q-menu>
+    <q-menu anchor="bottom left" self="top left"><q-list><q-item clickable v-close-popup :href="`#/telemetry?server=${encodeURIComponent(serverId)}`"><q-item-section avatar><q-icon name="power_settings_new"/></q-item-section><q-item-section>{{t('power.title')}}</q-item-section></q-item><q-item clickable v-close-popup :href="href(serverId)"><q-item-section avatar><q-icon name="network_check"/></q-item-section><q-item-section>{{t('Ansible ping')}}</q-item-section></q-item></q-list></q-menu>
   </q-btn>
 </template>

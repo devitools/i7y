@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "actions": [
+    {"id": "server.power-status", "target": "server", "permission": "write", "handler": "server_power.py", "action": "inspect"},
+    {"id": "server.power-on", "target": "server", "permission": "write", "handler": "server_power.py", "action": "start"},
+    {"id": "server.shutdown", "target": "server", "permission": "write", "handler": "server_power.py", "action": "shutdown"}
+  ]
+}

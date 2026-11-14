@@ -7,7 +7,7 @@ import { createIncidentInbox, incidentHref, sourceFingerprint } from '../inciden
 import { incidentSources } from '../incident-sources'
 import { incidentAlertsApi, incidentPhase, severityColor, alertTimestamp, alertLoadError } from '../alerts-api'
 import { t, locale } from '../i18n'
-import { incidentTargetHref, incidentMetric, incidentSourceUrl } from '../incident-presentation'
+import { incidentTargetHref, incidentServerHref, incidentMetric, incidentSourceUrl } from '../incident-presentation'
 import PageHeader from './PageHeader.vue'
 import PageActions from './PageActions.vue'
 const props = defineProps<{route:any, canEdit:boolean}>()
@@ -67,6 +67,7 @@ const phaseTone = (row: any) => ({resolved:'positive',overdue:'negative',open:'p
 const formatDay = (value: string) => value ? new Date(value.replace(' ','T')).toLocaleDateString(locale.value) : '—'
 const formatTime = (value: string) => value ? new Date(value.replace(' ','T')).toLocaleTimeString(locale.value,{hour:'2-digit',minute:'2-digit'}) : ''
 const detailActions = computed(() => [
+  ...(incidentServerHref(incident.value)?[{label:t('power.viewServer'),icon:'dns',outline:true,onClick:()=>openSourceTarget(incident.value,incidentServerHref(incident.value))}]:[]),
   ...(sourceCanEdit.value && incident.value?.status==='open' && sourceRule.value?.model_version===2 ? [{label:t('incidents.excludeFromRule'),icon:'notifications_off',outline:true,disable:busy.value,onClick:excludeFromRule}] : []),
   ...(incident.value?.origin==='rule' && incident.value?.rule ? [{label:t('incidents.viewAlert'),icon:'notifications_active',outline:true,onClick:openSourceRule,loading:sourceRulesLoading.value,disable:!sourceRulesLoading.value && !sourceRule.value}] : []),
   ...(sourceCanEdit.value && incident.value?.status==='open' ? [

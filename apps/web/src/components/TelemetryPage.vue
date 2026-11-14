@@ -6,6 +6,7 @@ import { t, locale } from '../i18n'
 import { routeHash } from '../routes'
 import PageHeader from './PageHeader.vue'
 import PageActions from './PageActions.vue'
+import ServerPower from './ServerPower.vue'
 import { sameTelemetryData, containerStateText, containerSummary, containerGroup, memoryPercent, diskPercent, timestamp } from '../telemetry-summary'
 import TelemetryTrend from './TelemetryTrend.vue'
 const props=defineProps({canEdit:Boolean,initialServer:{type:String,default:null}})
@@ -90,6 +91,7 @@ onUnmounted(()=>{generation++;lookupGeneration++;clearInterval(timer)})
  </q-card>
  <q-card v-if="!server && !busy" flat bordered class="telemetry-empty"><q-icon name="dns" size="36px" color="primary"/><h2>{{t('No servers available')}}</h2><q-btn flat no-caps color="primary" :label="t('Servers')" href="#/servers"/></q-card>
  <template v-if="server">
+  <ServerPower v-if="canEdit" :key="server" :server-id="server" />
   <q-banner v-if="stale" class="telemetry-warning q-mb-md" rounded><template #avatar><q-icon name="schedule"/></template>{{t('Showing the last known condition')}} · {{t('No communication')}}</q-banner>
   <q-card v-if="latest && !last?.observed_at" flat bordered class="telemetry-empty q-mb-md"><q-icon name="monitor_heart" size="36px" color="primary"/><h2>{{t('No telemetry')}}</h2><p>{{t('Install the daemon to see live server metrics.')}}</p><q-btn v-if="canEdit" no-caps unelevated color="primary" icon="terminal" :label="t('Install daemon')" :href="installLink"/></q-card>
   <template v-else-if="latest">

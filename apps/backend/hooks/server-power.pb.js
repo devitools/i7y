@@ -1,0 +1,6 @@
+routerAdd('GET','/api/i7y/server-power/v1/servers/{id}',e=>require(__hooks+'/lib/server-power.js').handle(e,'get'),$apis.requireAuth('users'))
+routerAdd('PUT','/api/i7y/server-power/v1/servers/{id}',e=>require(__hooks+'/lib/server-power.js').handle(e,'save'),$apis.requireAuth('users'),$apis.bodyLimit(16384))
+routerAdd('POST','/api/i7y/server-power/v1/servers/{id}/jobs',e=>require(__hooks+'/lib/server-power.js').handle(e,'begin'),$apis.requireAuth('users'),$apis.bodyLimit(4096))
+routerAdd('POST','/api/i7y/server-power/v1/servers/{id}/jobs/{job}/checkpoint',e=>require(__hooks+'/lib/server-power.js').handle(e,'checkpoint'),$apis.requireAuth('users'),$apis.bodyLimit(4096))
+routerAdd('POST','/api/i7y/server-power/v1/servers/{id}/jobs/{job}/finish',e=>require(__hooks+'/lib/server-power.js').handle(e,'finish'),$apis.requireAuth('users'),$apis.bodyLimit(4096))
+routerAdd('POST','/api/i7y/server-power/v1/servers/{id}/jobs/{job}/reconcile',e=>require(__hooks+'/lib/server-power.js').handle(e,'reconcile'),$apis.requireAuth('users'),$apis.bodyLimit(4096))

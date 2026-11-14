@@ -18,6 +18,11 @@ export function incidentTargetHref(row: any) {
   return null
 }
 
+export function incidentServerHref(row: any) {
+  const id=row?.server_id || (row?.resource_type==='server'?row.resource_id:'')
+  return typeof id==='string'&&/^[a-z0-9]{15}$/.test(id)?routeHash({view:'telemetry',server:id}):null
+}
+
 export function incidentMetric(row: any, translate: (key: string) => string, language: string) {
   const evidence = row.evidence || {}, value = evidence.value ?? evidence.observed_value
   const metric = typeof evidence.metric === 'string' ? evidence.metric : ''

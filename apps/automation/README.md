@@ -1,5 +1,9 @@
 # Automation
 
+Manual SNEL power and encrypted-disk actions live in [desktop/](desktop/actions.json).
+They are reached from server telemetry and incident server links. See the
+[configuration and recovery guide](../../docs/server-power.md).
+
 The current desktop direction uses SSH directly to Ansible. The declarative catalog,
 playbooks and project-copy implementation are in [ansible/](ansible/README.md).
 They do not require installing the Rust executor described below. The initial

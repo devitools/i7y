@@ -14,5 +14,6 @@ import alertsUk from './locales/uk/alerts'
 import operationsEn from './locales/en/operations'
 import operationsPtBR from './locales/pt-BR/operations'
 import operationsUk from './locales/uk/operations'
+import serverPower from './locales/server-power'
 
-export const messages = { en:{...connectionsEn,...en,...alertsEn,...operationsEn,...mcpEn}, 'pt-BR':{...connectionsPtBR,...ptBR,...alertsPtBR,...operationsPtBR,...mcpPtBR}, uk:{...connectionsUk,...uk,...alertsUk,...operationsUk,...mcpUk} }
+export const messages = { en:{...connectionsEn,...en,...alertsEn,...operationsEn,...mcpEn,...serverPower.en}, 'pt-BR':{...connectionsPtBR,...ptBR,...alertsPtBR,...operationsPtBR,...mcpPtBR,...serverPower['pt-BR']}, uk:{...connectionsUk,...uk,...alertsUk,...operationsUk,...mcpUk,...serverPower.uk} }
