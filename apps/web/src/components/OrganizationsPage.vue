@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
-import { activeOrganization, organizationChoices, globalAdmin, organizationApi, loadOrganizations, management, setOrganization } from '../api'
+import { activeOrganization, organizationChoices, globalAdmin, organizationApi, loadOrganizations, management, setOrganization, pb } from '../api'
 import { t, locale } from '../i18n'
 import PageHeader from './PageHeader.vue'
 import { leadingRowActions } from '../table-columns'
@@ -78,7 +78,7 @@ async function submit(){
       else await organizationApi.removeMember(org,selected.value.id)
     }else if(action.value==='new'){
       const r=await organizationApi.invite(org,{email:email.value,role:role.value})
-      link.value=window.location.origin+window.location.pathname+'#/invite/'+r.token
+      link.value=pb.buildURL('/#/invite/'+r.token)
       return
     }else await organizationApi.revoke(org,selected.value.id)
     await loadOrganizations();emit('changed')
