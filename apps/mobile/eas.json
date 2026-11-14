@@ -51,7 +51,8 @@
       "env": {
         "I7Y_BUILD_VARIANT": "production",
         "EXPO_PUBLIC_I7Y_PUSH_GATEWAY_URL": "https://push.devi.tools"
-      }
+      },
+      "environment": "production"
     }
   },
   "submit": {
