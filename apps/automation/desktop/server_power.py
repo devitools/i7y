@@ -46,7 +46,13 @@ def vault_item(reference, otp=False, metadata=False):
 
 
 def field(item, name):
-    values = [f.get('value') for f in item.get('fields', []) if f.get('id') == name or f.get('label', '').lower() == name.lower()]
+    fields = item.get('fields', [])
+    primary = [entry for entry in fields if entry.get('id') == name]
+    if primary:
+        if len(primary) != 1 or not isinstance(primary[0].get('value'), str) or not primary[0]['value']:
+            raise Failure('vault_unavailable')
+        return primary[0]['value']
+    values = [entry.get('value') for entry in fields if entry.get('label', '').lower() == name.lower()]
     values = list(dict.fromkeys(x for x in values if isinstance(x, str) and x))
     if len(values) != 1:
         raise Failure('vault_unavailable')

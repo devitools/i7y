@@ -198,6 +198,38 @@ class PowerTests(unittest.TestCase):
         self.assertEqual(error.exception.reason, 'disk_key_rejected')
 
 
+class CredentialFieldTests(unittest.TestCase):
+    def test_provider_login_uses_builtin_fields_instead_of_another_sections_password(self):
+        reference = {'version': 2, 'vault': '1password', 'account': 'fixture.1password.com', 'item': 'Provider'}
+        item = {'fields': [
+            {'id': 'username', 'label': 'username', 'value': 'provider-user'},
+            {'id': 'password', 'label': 'password', 'value': 'provider-secret'},
+            {'id': 'backup-password', 'label': 'Password', 'value': 'backup-secret', 'section': {'id': 'backup'}},
+        ]}
+        provider = power.Provider({'provider_credential': reference})
+        with patch.object(power, 'vault_item', return_value=item) as read, patch.object(provider, 'request', return_value={'token': 'fixture-token'}) as request:
+            provider.login()
+        read.assert_called_once_with(reference)
+        request.assert_called_once_with('login', {'username': 'provider-user', 'password': 'provider-secret'})
+
+    def test_empty_or_duplicate_builtin_field_never_falls_back_to_another_password(self):
+        for primary in [
+            [{'id': 'password', 'label': 'password', 'value': ''}],
+            [{'id': 'password', 'value': 'first-secret'}, {'id': 'password', 'value': 'second-secret'}],
+        ]:
+            item = {'fields': primary + [{'id': 'backup', 'label': 'Password', 'value': 'backup-secret'}]}
+            with self.subTest(primary=primary), self.assertRaises(power.Failure) as error:
+                power.field(item, 'password')
+            self.assertEqual(error.exception.reason, 'vault_unavailable')
+
+    def test_unique_custom_disk_field_remains_supported(self):
+        item = {'fields': [{'id': 'disk', 'label': 'Disk Encryption Password', 'value': 'disk-secret'}]}
+        self.assertEqual(power.field(item, 'Disk Encryption Password'), 'disk-secret')
+        item['fields'].append({'id': 'other-disk', 'label': 'disk encryption password', 'value': 'other-secret'})
+        with self.assertRaises(power.Failure):
+            power.field(item, 'Disk Encryption Password')
+
+
 class VaultConfigurationTests(unittest.TestCase):
     def setUp(self):
         self.reference = {'provider': '1password', 'account': 'team.example.com', 'vault': 'Infrastructure', 'item': 'VPN server'}
