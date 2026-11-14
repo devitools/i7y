@@ -247,6 +247,14 @@ class VaultConfigurationTests(unittest.TestCase):
             self.read()
         self.assertEqual(error.exception.reason, 'vault_metadata_invalid')
 
+    def test_legacy_ip_label_is_checked_against_the_target(self):
+        self.item['fields'].append({'label': 'IP', 'type': 'STRING', 'value': '192.0.2.10'})
+        self.assertEqual(self.read()['vm_id'], '456')
+        self.item['fields'][-1]['value'] = '192.0.2.11'
+        with self.assertRaises(power.Failure) as error:
+            self.read()
+        self.assertEqual(error.exception.reason, 'vault_target_mismatch')
+
     def test_cli_reads_the_saved_account_and_rejects_option_injection(self):
         response = unittest.mock.Mock(returncode=0, stdout=b'{"fields":[]}')
         with patch.object(power.vaults, 'executable', return_value='/fixture/op'), patch.object(power.vaults.OnePassword, 'account_id', return_value='team.example.com'), patch.object(power.subprocess, 'run', return_value=response) as run:
@@ -394,6 +402,16 @@ class OnePasswordAccountTests(unittest.TestCase):
         with self.assertRaises(power.Failure):
             self.read({**self.reference, 'account': 'DiskNinja'})
         self.assertFalse(any(args[1:3] == ['item', 'get'] for args in self.calls))
+
+    def test_duplicate_account_identifiers_never_select_a_default_user(self):
+        self.accounts.append({**self.accounts[0], 'user_uuid': 'E' * 26})
+        for selector in ['fixture.1password.com', self.primary, 'C' * 26, 'E' * 26, 'Disk Ninja']:
+            with self.subTest(selector=selector):
+                self.calls = []
+                with self.assertRaises(power.Failure) as error:
+                    self.read({**self.reference, 'account': selector})
+                self.assertEqual(error.exception.reason, 'vault_unavailable')
+                self.assertFalse(any(args[1:3] == ['item', 'get'] for args in self.calls))
 
     def test_legacy_default_account_does_not_trigger_a_metadata_lookup(self):
         self.read({**self.reference, 'account': ''})

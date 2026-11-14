@@ -90,6 +90,8 @@ class OnePassword:
             identifier = account.get('account_uuid')
             if not isinstance(identifier, str) or not re.fullmatch(r'[A-Za-z0-9]{26}', identifier):
                 raise Failure('vault_unavailable')
+            if identifier in known:
+                raise Failure('vault_unavailable')
             known[identifier] = account
             selectors = [identifier, account.get('user_uuid'), account.get('shorthand')]
             url = account.get('url')

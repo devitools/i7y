@@ -169,7 +169,7 @@ def configuration(request):
     vm = metadata('SNEL VM ID', 'vm_id')
     if not service or not vm:
         raise Failure('vault_metadata_missing')
-    declared = metadata('IP address', 'ip_address')
+    declared = metadata('IP address', 'ip_address', 'IP')
     if declared:
         try:
             if ipaddress.ip_address(declared) != address:
