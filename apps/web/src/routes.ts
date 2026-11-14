@@ -40,7 +40,7 @@ export function readRoute(hash: string): RouteState {
   if (path === 'login') return {view:'login'}
   if(path==='manage/containers/bulk-delete') return {view:'bulkDelete',resource:'containers',ids:[...new Set(params.getAll('id').filter(id=>/^[a-z0-9]{15}$/.test(id)))].slice(0,100),returnTo:inventoryReturn(params.get('returnTo'))}
   if (parts[0] === 'manage' && ['workspaces','servers','projects','containers'].includes(parts[1]) && ((parts[2] === 'new' && parts.length === 3) || (parts[2] && ['edit','delete'].includes(parts[3]) && parts.length === 4))) {
-    return {view:'manage', resource:parts[1], action:parts[2] === 'new' ? 'new' : parts[3], id:parts[2] === 'new' ? null : parts[2], parent:params.get('parent'), ...(inventoryReturn(params.get('returnTo')) ? {returnTo:inventoryReturn(params.get('returnTo'))} : {})}
+    return {view:'manage', resource:parts[1], action:parts[2] === 'new' ? 'new' : parts[3], id:parts[2] === 'new' ? null : parts[2], parent:params.get('parent'), ...(managementReturn(params.get('returnTo')) ? {returnTo:managementReturn(params.get('returnTo'))} : {})}
   }
   const state=readListState(params)
   if(params.has('status')) {
@@ -81,12 +81,15 @@ export function managementHash(resource, action = 'new', id = null, parent = nul
   if (!['workspaces','servers','projects','containers'].includes(resource) || !['new','edit','delete'].includes(action)) throw new TypeError('Invalid management route')
   const params = new URLSearchParams()
   if(parent) params.set('parent',parent)
-  if(inventoryReturn(returnTo)) params.set('returnTo',returnTo)
+  if(managementReturn(returnTo)) params.set('returnTo',returnTo)
   return `#/manage/${resource}/${action === 'new' ? 'new' : `${encodeURIComponent(id)}/${action}`}${params.size ? `?${params}` : ''}`
 }
 
 export function inventoryReturn(hash) {
   return typeof hash==='string' && /^#\/(workspaces|servers|projects|containers|images)(\?|$)/.test(hash) ? hash : null
+}
+function managementReturn(hash) {
+  return inventoryReturn(hash) || (typeof hash==='string' && /^#\/telemetry(?:\?|$)/.test(hash) ? hash : null)
 }
 function readListState(params: URLSearchParams): ListState {
   const state: ListState={}

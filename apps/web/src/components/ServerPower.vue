@@ -12,6 +12,7 @@ const props=defineProps<{serverId:string}>()
 const q=useQuasar(),data=ref<any>(null),loaded=ref<{server:string;source:string}|null>(null),error=ref(''),busy=ref(false),saving=ref(false),loading=ref(false),stage=ref(''),request=ref('')
 interface LocalSettings {supported:boolean;identity_file:string;proxy_available:boolean;context?:PowerNativeContext}
 const local=ref<LocalSettings>({supported:false,identity_file:'',proxy_available:false}),identity=ref(''),viaHost=ref(false),showSettings=ref(false)
+const currentHash=()=>window.location.hash
 const referenceLabel=(value:any)=>value?[value.account,value.vault,value.item].filter(Boolean).join(' / '):t('vault.notLinked')
 const source=computed(()=>{connectionRevision.value;activeConnectionId.value;activeOrganization.value;try{return captureServerPowerSource()}catch{return null}})
 const sourceIdentity=computed(()=>source.value?JSON.stringify(source.value.identity):'')
@@ -104,8 +105,8 @@ function reconcile(job:any){const current=generation,selected=source.value,serve
     <q-card-section v-if="showSettings&&data?.can_configure" class="q-pt-none">
       <div class="power-settings">
         <div class="power-wide"><p>{{t('power.inventoryHelp')}}</p></div>
-        <div><strong>{{t('vault.serverItem')}}</strong><p>{{referenceLabel(data.credentials?.server)}}</p><q-btn flat no-caps :href="managementHash('servers','edit',serverId)" :label="t('vault.editServer')" :disable="busy||saving||blocked"/></div>
-        <div><strong>{{t('vault.workspaceItem')}}</strong><p>{{referenceLabel(data.credentials?.workspace)}}</p><q-btn flat no-caps :href="managementHash('workspaces','edit',data.workspace)" :label="t('vault.editWorkspace')" :disable="busy||saving||blocked"/></div>
+        <div><strong>{{t('vault.serverItem')}}</strong><p>{{referenceLabel(data.credentials?.server)}}</p><q-btn flat no-caps :href="managementHash('servers','edit',serverId,null,currentHash())" :label="t('vault.editServer')" :disable="busy||saving||blocked"/></div>
+        <div><strong>{{t('vault.workspaceItem')}}</strong><p>{{referenceLabel(data.credentials?.workspace)}}</p><q-btn flat no-caps :href="managementHash('workspaces','edit',data.workspace,null,currentHash())" :label="t('vault.editWorkspace')" :disable="busy||saving||blocked"/></div>
         <p class="power-wide">{{t('power.itemFieldsHelp')}}</p>
         <div class="row justify-end power-wide"><q-btn unelevated color="primary" no-caps icon="sync" :label="t('power.loadConfiguration')" :loading="saving" :disable="!local.supported||!data.configuration||busy||blocked" @click="importConfiguration"/></div>
       </div>

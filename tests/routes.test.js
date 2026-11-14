@@ -92,6 +92,12 @@ test('server filters survive URLs and invalid return targets are ignored', async
   assert.equal(invalid.page,undefined)
   assert.equal(invalid.coverage,undefined)
 })
+test('editing linked credentials returns to the same server telemetry',async()=>{
+  const {managementHash}=await import('../apps/web/src/routes.js')
+  const back='#/telemetry?server=server-id'
+  for(const resource of ['servers','workspaces'])assert.equal(readRoute(managementHash(resource,'edit','record-id',null,back)).returnTo,back)
+  assert.equal(readRoute(managementHash('servers','edit','record-id',null,'#/telemetry/invalid')).returnTo,undefined)
+})
 
 test('multiple image selections survive URLs and management return links', async () => {
   const {managementHash}=await import('../apps/web/src/routes.js')
