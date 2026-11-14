@@ -5,6 +5,7 @@ The **Build release artifacts** workflow builds a single main-branch commit into
 - macOS app ZIP and DMG bundles for Apple Silicon and Intel, including the MCP sidecar.
 - Web frontend archive.
 - Multi-platform backend OCI container archive for Linux amd64 and arm64, plus backend source files.
+- Multi-platform push gateway OCI container archive and standalone gateway source files.
 - Linux amd64/arm64 agents and the Windows amd64 host agent.
 - Build metadata and SHA256SUMS for the release assets.
 

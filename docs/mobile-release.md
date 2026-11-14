@@ -2,6 +2,12 @@
 
 This is a preparation runbook, checked against the repository and official documentation on 2026-10-29. It does not report a submitted, approved, or published app. The release path is native simulator/emulator development, real APNs/FCM verification in a supported virtual environment, signed production artifacts, then App Store Review and Google Play production. There is no TestFlight testing or beta-distribution stage.
 
+## Version 0.2.0 internal testing — November 13, 2026
+
+The current release adds independent backend connections and a combined incident inbox. The publisher selected internal iPhone and Android testing for this version. Build both platforms with the `device` profile; it keeps the existing app identifiers and EAS project, uses an ad hoc iOS profile, and generates an Android APK. Do not submit these builds to either store. The published App Store version remains available.
+
+The canonical push origin is `https://push.devi.tools`. The compatible `https://i7y-push.disk.ninja` address and v1 API must stay usable by installed clients. Production APNs, sandbox APNs, and FCM credentials are already configured on the existing gateway and must be preserved during migration. Store and delivery milestones below are historical records, not the current 0.2.0 status.
+
 ## App Store submission — October 30, 2026
 
 App Store Connect accepted iOS version `0.1.0 (2)` for review at 18:43 America/Fortaleza (UTC−03:00). The verified status is **Waiting for Review**; this is not approval or public availability. Submission ID: `88d9e054-2dea-42d5-a0ac-7ec68c6e98ae`. App ID: `6828724152`.
