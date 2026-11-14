@@ -8,12 +8,19 @@ import {desktopRuntime} from '../desktop-backend'
 import {captureServerPowerSource,createServerPowerApi,powerProgressMatches,type PowerNativeContext,type ServerPowerSource} from '../server-power-api'
 import {t,locale} from '../i18n'
 import {managementHash} from '../routes'
+import {credentialReference,credentialManagerLabel} from '../vault-reference'
 const props=defineProps<{serverId:string}>()
 const q=useQuasar(),data=ref<any>(null),loaded=ref<{server:string;source:string}|null>(null),error=ref(''),busy=ref(false),saving=ref(false),loading=ref(false),stage=ref(''),request=ref('')
 interface LocalSettings {supported:boolean;identity_file:string;proxy_available:boolean;context?:PowerNativeContext}
 const local=ref<LocalSettings>({supported:false,identity_file:'',proxy_available:false}),identity=ref(''),viaHost=ref(false),showSettings=ref(false)
 const currentHash=()=>window.location.hash
-const referenceLabel=(value:any)=>value?[value.account,value.vault,value.item].filter(Boolean).join(' / '):t('vault.notLinked')
+const referenceLabel=(value:any)=>{
+  if(!value)return t('vault.notLinked')
+  try{
+    const reference=credentialReference(value)
+    return reference.item?[credentialManagerLabel(reference),reference.account,reference.item].filter(Boolean).join(' / '):t('vault.notLinked')
+  }catch{return t('vault.invalidReference')}
+}
 const source=computed(()=>{connectionRevision.value;activeConnectionId.value;activeOrganization.value;try{return captureServerPowerSource()}catch{return null}})
 const sourceIdentity=computed(()=>source.value?JSON.stringify(source.value.identity):'')
 let generation=0,timer:ReturnType<typeof setInterval>|undefined,refreshing=false,unlisten:UnlistenFn|undefined,dialog:{hide:()=>unknown}|undefined

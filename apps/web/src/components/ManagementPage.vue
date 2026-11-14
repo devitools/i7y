@@ -8,7 +8,7 @@ import { normalizeBackendUrl } from '../backend-url'
 import { t } from '../i18n'
 import PageHeader from './PageHeader.vue'
 import { repositoryHref, versionControlLabel } from '../project-repository'
-import {vaultReference,savedVaultReference,type VaultReference} from '../vault-reference'
+import {credentialManagers,credentialReference,savedCredentialReference,type CredentialReference} from '../vault-reference'
 const desktopCode=ref('')
 const backendUrl=ref(desktopBackend.value)
 const backendValid=computed(()=>{try{return !!normalizeBackendUrl(backendUrl.value)}catch{return false}})
@@ -29,7 +29,7 @@ async function signInWithBrowser() {
   finally {busy.value=false}
 }
 interface ManagementForm {
-  credential?: VaultReference
+  credential?: CredentialReference
   email?: string
   password?: string
   login?: string
@@ -41,15 +41,12 @@ interface ManagementForm {
   type?: string
   product?: string
   ip?: string
-  status?: string
   source_repository_url?: string
   deployment_branch?: string
   deployment_template?: string
   version_control_status?: string
   path?: string
   image?: string
-  sort_order?: number
-  inventory_known?: boolean
 }
 const props = defineProps({route:Object, canEdit:Boolean, authenticated:Boolean})
 const emit = defineEmits(['back','saved','signed-in'])
@@ -65,6 +62,10 @@ const workspaceOptions = computed(() => workspaces.value.map(w => ({label:w.logi
 const serverOptions = computed(() => servers.value.filter(s=>s.type==='VPS' || s.id===form.value.server).map(s=>({label:`${s.name || s.ip || s.product || s.id} / ${s.account || ''}`,value:s.id})))
 const projectOptions = computed(() => projects.value.map(p=>({label:`${p.name} / ${p.server?.name || ''}`,value:p.id})))
 const versionControlOptions = computed(() => ['unknown','versioned','unversioned'].map(value => ({value,label:t(versionControlLabel(value))})))
+const credentialManagerOptions = computed(() => {
+  const manager=form.value.credential?.vault
+  return !manager||credentialManagers.some(option=>option.value===manager)?credentialManagers:[...credentialManagers,{value:manager,label:`${manager} (${t('vault.unsupported')})`,disable:true}]
+})
 const validRepository = value => !value || !!repositoryHref(value.trim()) || t('Use an HTTP or HTTPS repository URL without credentials, query parameters or fragments.')
 const required = value => !!String(value ?? '').trim() || t('Required field')
 function failure(e) {
@@ -81,9 +82,9 @@ async function load() {
     record.value=props.route.id ? await management.get(props.route.resource,props.route.id) : null
     const r=record.value || {}
     const parent=props.route.parent
-    const defaults={workspaces:{login:'',provider:''},servers:{workspace:parent || null,type:'VPS',name:'',product:'',ip:'',status:'ACTIVE',inventory_known:true,sort_order:0},projects:{server:parent || null,name:'',path:'',source_repository_url:'',deployment_branch:'',deployment_template:'',version_control_status:'unknown',sort_order:0},containers:{project:parent || null,name:'',image:'',sort_order:0}}
+    const defaults={workspaces:{login:'',provider:''},servers:{workspace:parent || null,type:'VPS',name:'',product:'',ip:''},projects:{server:parent || null,name:'',path:'',source_repository_url:'',deployment_branch:'',deployment_template:'',version_control_status:'unknown'},containers:{project:parent || null,name:'',image:''}}
     form.value={...defaults[props.route.resource],...r}
-    if(['servers','workspaces'].includes(props.route.resource))form.value.credential=vaultReference(r.credential)
+    if(['servers','workspaces'].includes(props.route.resource))form.value.credential=credentialReference(r.credential)
     if (deleting.value) {
       const summary=await inventoryScope(props.route.resource,r.id)
       if(!summary)throw new Error('Missing record')
@@ -131,10 +132,13 @@ async function submit() {
     if (!props.canEdit) return
     if (deleting.value) await management.remove(props.route.resource,props.route.id)
     else {
-      const fields={workspaces:['login','provider'],servers:['workspace','type','name','product','ip','status','inventory_known','sort_order'],projects:['server','name','path','source_repository_url','deployment_branch','deployment_template','version_control_status','sort_order'],containers:['project','name','image','sort_order']}[props.route.resource]
+      const fields={workspaces:['login','provider'],servers:['workspace','type','name','product','ip'],projects:['server','name','path','source_repository_url','deployment_branch','deployment_template','version_control_status'],containers:['project','name','image']}[props.route.resource]
       const values=Object.fromEntries(fields.map(key=>[key,typeof form.value[key]==='string' ? form.value[key].trim() : form.value[key]]))
-      if(['servers','workspaces'].includes(props.route.resource))values.credential=savedVaultReference(form.value.credential)
-      if (props.route.resource==='projects') await management.update('servers',values.server,{inventory_known:true})
+      if(['servers','workspaces'].includes(props.route.resource)){
+        const reference=form.value.credential
+        const account=reference?.account.trim()||'',item=reference?.item.trim()||''
+        values.credential=savedCredentialReference(!account&&!item?null:{...reference,account,item})
+      }
       if (props.route.id) await management.update(props.route.resource,props.route.id,values)
       else await management.create(props.route.resource,values)
     }
@@ -151,7 +155,7 @@ async function submit() {
 <template>
   <q-page class="q-pa-md inventory-page" :class="{'login-page':login}">
     <PageHeader v-if="!login" :title="title" />
-    <q-card flat bordered class="management-card" :class="{'login-card':login,'project-management-card':route.resource==='projects' && !deleting}">
+    <q-card flat bordered class="management-card" :class="{'login-card':login}">
       <q-card-section v-if="loading" class="q-pa-xl text-center"><q-spinner color="primary" size="32px" /><p>{{t('Loading')}}</p></q-card-section>
       <q-card-section v-else-if="!login && !canEdit"><q-icon name="lock" size="28px" class="q-mb-md" /><p>{{t('Sign in to manage the inventory.')}}</p><q-btn v-if="!authenticated" color="primary" no-caps :label="t('Sign in')" href="#/login" /></q-card-section>
       <q-form v-else @submit="submit" class="q-pa-lg q-gutter-y-md">
@@ -173,22 +177,28 @@ async function submit() {
         </template>
         <template v-else-if="!route.id || record">
           <template v-if="route.resource==='workspaces'">
+            <div class="management-form-row">
             <q-input v-model="form.login" outlined :label="t('Workspace login')" :rules="[required]" :error="!!fieldErrors.login" :error-message="fieldErrors.login" autofocus />
             <q-input v-model="form.provider" outlined :label="t('Provider')" />
+            </div>
           </template>
           <template v-if="route.resource==='servers'">
+            <div class="management-form-row">
             <q-select v-model="form.workspace" outlined :options="workspaceOptions" use-input input-debounce="300" @filter="(value,done)=>lookup('workspaces',value,done)" emit-value map-options :label="t('Workspace')" :rules="[required]" :error="!!fieldErrors.workspace" :error-message="fieldErrors.workspace" />
             <q-input v-model="form.name" outlined :label="t('Name')" :rules="[required]" :error="!!fieldErrors.name" :error-message="fieldErrors.name" />
+            </div>
+            <div class="management-form-row">
             <q-input v-model="form.type" outlined :label="t('Type')" :rules="[required]" :hint="t('Use VPS for servers with projects and containers.')" />
             <q-input v-model="form.product" outlined :label="t('Product')" />
             <q-input v-model="form.ip" outlined :label="t('IP address')" />
-            <q-input v-model="form.status" outlined :label="t('Provider status')" />
-            <q-toggle v-model="form.inventory_known" :label="t('Internal inventory confirmed')" />
+            </div>
           </template>
           <template v-if="route.resource==='projects'">
+            <div class="management-form-row">
             <q-select v-model="form.server" outlined :options="serverOptions" use-input input-debounce="300" @filter="(value,done)=>lookup('servers',value,done)" emit-value map-options :label="t('Server')" :rules="[required]" :error="!!fieldErrors.server" :error-message="fieldErrors.server" />
             <q-input v-model="form.name" outlined :label="t('Name')" :rules="[required]" :error="!!fieldErrors.name" :error-message="fieldErrors.name" />
             <q-input v-model="form.path" outlined :label="t('Directory path')" />
+            </div>
             <q-separator class="q-my-lg" />
             <h2 class="text-subtitle1 q-mb-sm">{{t('Source repository')}}</h2>
             <div class="repository-form-fields">
@@ -198,22 +208,23 @@ async function submit() {
             <q-input class="repository-template-field" v-model="form.deployment_template" outlined :label="t('Deployment template')" :maxlength="1024" :error="!!fieldErrors.deployment_template" :error-message="fieldErrors.deployment_template" :hint="t('Relative path inside the source repository.')" />
             </div>
             <p class="text-caption text-grey-7">{{t('Repository details are managed here and preserved when the agent updates the inventory.')}}</p>
-            <p class="text-caption text-grey-7">{{t('Saving a project confirms the internal inventory of its server.')}}</p>
           </template>
           <template v-if="route.resource==='containers'">
+            <div class="management-form-row">
             <q-select v-model="form.project" outlined :options="projectOptions" use-input input-debounce="300" @filter="(value,done)=>lookup('projects',value,done)" emit-value map-options :label="t('Project')" :rules="[required]" :error="!!fieldErrors.project" :error-message="fieldErrors.project" />
             <q-input v-model="form.name" outlined :label="t('Name')" :rules="[required]" :error="!!fieldErrors.name" :error-message="fieldErrors.name" />
             <q-input v-model="form.image" outlined :label="t('Image')" :rules="[required]" :error="!!fieldErrors.image" :error-message="fieldErrors.image" />
+            </div>
           </template>
-          <section v-if="['servers','workspaces'].includes(route.resource)&&form.credential" class="q-mt-md q-mb-lg">
+          <section v-if="['servers','workspaces'].includes(route.resource)&&form.credential" class="credential-section">
             <h2 class="text-subtitle1">{{t('vault.title')}}</h2>
             <p class="text-caption text-grey-7">{{t(route.resource==='servers'?'vault.serverHelp':'vault.workspaceHelp')}}</p>
-            <q-input model-value="1Password" outlined readonly :label="t('vault.provider')" class="q-mb-md"/>
-            <q-input v-model="form.credential.account" outlined :label="t('vault.account')" :hint="t('vault.accountHelp')" maxlength="240" class="q-mb-md"/>
-            <q-input v-model="form.credential.vault" outlined :label="t('vault.vault')" maxlength="240" class="q-mb-md"/>
+            <div class="management-form-row">
+            <q-select v-model="form.credential.vault" outlined :options="credentialManagerOptions" emit-value map-options :label="t('vault.provider')"/>
+            <q-input v-model="form.credential.account" outlined :label="t('vault.account')" :hint="t('vault.accountHelp')" maxlength="240"/>
             <q-input v-model="form.credential.item" outlined :label="t('vault.item')" maxlength="240" :error="!!fieldErrors.credential" :error-message="fieldErrors.credential"/>
+            </div>
           </section>
-          <q-input v-if="route.resource!=='workspaces'" v-model.number="form.sort_order" outlined type="number" :label="t('Sort order')" />
         </template>
         <div class="row justify-end q-gutter-sm q-pt-md"><q-btn v-if="!login" flat no-caps :label="t('Cancel')" :disable="busy" @click="emit('back')" /><q-btn v-if="(login && !browserLogin) || (!login && ready)" type="submit" unelevated no-caps :color="deleting?'negative':'primary'" :icon="login?undefined:deleting?'delete':'save'" :label="t(login?'Sign in':deleting?'Delete permanently':'Save')" :loading="busy" /></div>
       </q-form>
@@ -228,12 +239,16 @@ async function submit() {
 .management-card {width:100%;margin:0 0 24px}
 .management-card h2 {overflow-wrap:anywhere}
 .management-card :deep(.q-field__label) {max-width:100%}
-.project-management-card {max-width:none}
+.management-form-row {display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start}
+.management-form-row > .q-field {flex:1 1 220px;min-width:0}
+.credential-section {margin:24px 0 8px}
+.credential-section h2 {margin:0 0 8px}
 .repository-form-fields {display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start}
 .repository-form-fields > .q-field {flex:1 1 150px;min-width:0}
 .repository-form-fields > .repository-url-field {flex:2 1 280px}
 .repository-form-fields > .repository-template-field {flex:2 1 280px}
 @media(max-width:599px) {
+  .management-form-row > .q-field {flex-basis:100%}
   .repository-form-fields > .q-field {flex-basis:100%}
   .management-card > .q-form {padding:16px}
 }
