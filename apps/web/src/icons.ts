@@ -3,6 +3,8 @@ const aliases: Record<string,string> = {
   file_download:'download',
   cloud_queue:'cloud',
   help_outline:'help',
+  info_outline:'info',
+  error_outline:'error',
   people:'group',
   mail_outline:'mail',
   play_circle_outline:'play_circle',

@@ -123,6 +123,17 @@ startup result. With remote unlock configured, it also queries the pinned boot e
 to detect a locked disk, without reading or sending the disk password. Power on alone
 does not confirm operating-system readiness. Each result displays its own observation
 time; a later inspection cannot refresh the timestamp of an earlier startup success.
+A fresh observation remains visible even if an older start result is uncertain.
+An administrator can choose **Retry start** after checking the console. Its confirmation
+reconciles the previous attempt before creating a new request, which checks provider
+power and the disk prompt again. Running requests cannot be retried. A failed
+reconciliation or a changed session prevents dispatch.
+
+The desktop waits up to three minutes for boot SSH and up to three minutes for the
+interactive unlock exchange, within its overall nine-minute operation limit.
+A disconnect before any password was sent reports unavailable boot access; it does
+not imply an uncertain password submission. A timeout after sending a password
+still requires explicit reconciliation before another attempt.
 
 Ending the unlock SSH session only advances the operation to **Awaiting agent**.
 Recovery requires a newly accepted telemetry observation after the operation began.

@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {incidentServerHref} from '../apps/web/src/incident-presentation.ts'
 import {selectPowerResult,presentPowerResult} from '../apps/web/src/server-power-presentation.ts'
+import {materialSymbol} from '../apps/web/src/icons.ts'
 
 test('Server incidents and container incidents lead to their server controls',()=>{
   assert.equal(incidentServerHref({resource_type:'server',resource_id:'a'.repeat(15)}),'#/telemetry?server=aaaaaaaaaaaaaaa')
@@ -57,7 +58,21 @@ test('a new inspection never reuses the success or timestamp of an older startup
 
 test('unknown operations and real credential failures retain distinct outcomes',()=>{
   const unknown={action:'start',status:'unknown',stage:'unknown',reason:'provider_unavailable'}
-  assert.equal(selectPowerResult([{action:'inspect',status:'observed',stage:'provider_on'},unknown]),unknown)
+  const on={action:'inspect',status:'observed',stage:'provider_on'}
+  assert.equal(selectPowerResult([on,unknown]),on)
   assert.equal(presentPowerResult(unknown,false).tone,'warning')
   assert.equal(presentPowerResult({action:'start',status:'failed',stage:'failed',reason:'vault_unavailable'},false).tone,'negative')
+})
+
+test('fresh observations remain visible while a running request still takes precedence',()=>{
+  const unknown={action:'start',status:'unknown',stage:'unknown'}
+  const locked={action:'inspect',status:'observed',stage:'disk_locked'}
+  const running={action:'start',status:'running',stage:'waiting_for_boot'}
+  assert.equal(selectPowerResult([locked,unknown]),locked)
+  assert.equal(selectPowerResult([locked,running]),running)
+  assert.equal(selectPowerResult([{...locked,status:'failed',stage:'failed'},unknown]),unknown)
+})
+
+test('power result icons resolve to available Material Symbols',()=>{
+  for(const icon of ['info_outline','error_outline','help_outline'])assert.equal(materialSymbol(icon).icon,'sym_o_'+icon.replace('_outline',''))
 })

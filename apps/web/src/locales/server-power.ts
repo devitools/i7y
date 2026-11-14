@@ -1,4 +1,8 @@
 const en={
+ "power.retryStart":"Retry start",
+ "power.confirmRetryStart":"Confirm that you checked the console and the previous attempt is no longer in progress. Retry will check power and the disk prompt before sending a new request:",
+ "power.retryHelp":"The previous attempt was not confirmed. If the console is still waiting for the disk password, use Retry start.",
+ "power.previousUnconfirmed":"The previous attempt remains unconfirmed; the observation above is from the latest status check.",
  "power.result.diskLocked":"Disk is waiting to be unlocked",
  "power.result.diskLockedHelp":"Use Start server to unlock the disk and continue startup.",
  "power.result.providerOnHelp":"SNEL confirms that power is on. This does not confirm that the disk is unlocked or the system has finished starting.",
@@ -49,6 +53,10 @@ const en={
  "vault.unsupported":"unavailable",
 }
 const pt={
+ "power.retryStart":"Tentar ligar novamente",
+ "power.confirmRetryStart":"Confirme que conferiu o console e a tentativa anterior não está mais em andamento. A nova tentativa verificará a energia e o pedido da senha do disco antes de enviar outra solicitação:",
+ "power.retryHelp":"A tentativa anterior não foi confirmada. Se o console ainda aguarda a senha do disco, use Tentar ligar novamente.",
+ "power.previousUnconfirmed":"A tentativa anterior segue sem confirmação; a observação acima é da consulta de status mais recente.",
  "power.result.diskLocked":"Disco aguardando desbloqueio",
  "power.result.diskLockedHelp":"Use Ligar servidor para desbloquear o disco e continuar a inicialização.",
  "power.result.providerOnHelp":"A SNEL confirma que há energia. Isso não confirma que o disco foi desbloqueado ou que o sistema terminou de iniciar.",
@@ -99,6 +107,10 @@ const pt={
  "vault.unsupported":"indisponível",
 }
 const uk={
+ "power.retryStart":"Повторити запуск",
+ "power.confirmRetryStart":"Підтвердьте, що перевірили консоль і попередня спроба вже не виконується. Перед новим запитом буде перевірено живлення та запит пароля диска:",
+ "power.retryHelp":"Попередню спробу не підтверджено. Якщо консоль очікує пароль диска, натисніть Повторити запуск.",
+ "power.previousUnconfirmed":"Попередня спроба залишається непідтвердженою; вище показано останню перевірку стану.",
  "power.result.diskLocked":"Диск очікує розблокування",
  "power.result.diskLockedHelp":"Натисніть Увімкнути сервер, щоб розблокувати диск і продовжити запуск.",
  "power.result.providerOnHelp":"SNEL підтверджує живлення. Це не підтверджує розблокування диска або завершення запуску системи.",

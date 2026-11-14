@@ -248,7 +248,7 @@ class Boot:
             raise Failure('boot_identity_mismatch')
         return result.returncode == 0 and len(result.stdout) <= 32768 and self.target['luks_uuid'].encode() in result.stdout.lower()
 
-    def unlock(self, secret):
+    def unlock(self, secret, timeout=180):
         if not secret or len(secret) > 4096 or re.search(r'[\r\n\x00]', secret):
             raise Failure('vault_unavailable')
         process = subprocess.Popen(self.args('unlock'), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -265,7 +265,7 @@ class Boot:
         threading.Thread(target=read, daemon=True).start()
         output = b''
         sent = False
-        deadline = time.monotonic() + 60
+        deadline = time.monotonic() + timeout
         try:
             while time.monotonic() < deadline:
                 try:
@@ -275,7 +275,7 @@ class Boot:
                 if not chunk:
                     if sent:
                         return
-                    raise Failure('unlock_unconfirmed')
+                    raise Failure('boot_unavailable')
                 output += chunk
                 if len(output) > 32768:
                     raise Failure('unlock_unconfirmed')
@@ -289,9 +289,9 @@ class Boot:
                     process.stdin.flush()
                     sent = True
                     output = b''
-            raise Failure('unlock_unconfirmed')
+            raise Failure('unlock_unconfirmed' if sent else 'boot_unavailable')
         except (OSError, subprocess.TimeoutExpired):
-            raise Failure('unlock_unconfirmed') from None
+            raise Failure('unlock_unconfirmed' if sent else 'boot_unavailable') from None
         finally:
             if process.poll() is None:
                 process.kill()
@@ -353,7 +353,7 @@ def run(request, provider_factory=Provider, boot_factory=Boot, sleep=time.sleep,
     emit(kind='progress', stage='waiting_for_boot')
     boot = boot_factory(request)
     try:
-        deadline = clock() + 120
+        deadline = clock() + 180
         while clock() < deadline:
             if boot.status():
                 break

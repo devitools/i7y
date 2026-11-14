@@ -7,8 +7,10 @@ export interface PowerJob {
 }
 
 export function selectPowerResult(jobs:PowerJob[]):PowerJob|undefined {
-  const blocking=jobs.find(job=>['running','unknown'].includes(job.status))
-  if(blocking)return blocking
+  const running=jobs.find(job=>job.status==='running')
+  if(running)return running
+  const unknown=jobs.find(job=>job.status==='unknown')
+  if(unknown&&!(jobs[0]?.action==='inspect'&&jobs[0]?.status==='observed'))return unknown
   const latest=jobs[0],operation=jobs.find(job=>job.action!=='inspect'&&job.status!=='reconciled')
   if(latest?.stage==='provider_on'&&operation&&['requires_console','awaiting_agent'].includes(operation.status))return operation
   return latest

@@ -118,7 +118,7 @@ class PowerTests(unittest.TestCase):
     def test_unavailable_boot_never_receives_a_password(self):
         self.provider.power = True
         self.boot.available = False
-        ticks = iter([0, 0, 121])
+        ticks = iter([0, 0, 181])
         result = self.run_action(clock=lambda: next(ticks), sleep=lambda _: None)
         self.assertEqual(result['status'], 'requires_console')
         self.read_vault.assert_not_called()
@@ -281,6 +281,32 @@ class PowerTests(unittest.TestCase):
     def test_bang_in_an_unrelated_message_is_not_a_password_prompt(self):
         self.assertIsNone(power.boot_password_prompt(b'Password unavailable!'))
         self.assertIsNone(power.boot_password_prompt(b'Please enter passphrase for a database!'))
+
+    def test_boot_disconnect_before_the_prompt_allows_an_explicit_retry(self):
+        boot = power.Boot.__new__(power.Boot)
+        boot.target = {'luks_uuid': UUID}
+        boot.args = lambda _: [sys.executable, '-c', 'raise SystemExit(255)']
+        with self.assertRaises(power.Failure) as error:
+            boot.unlock(self.secret)
+        self.assertEqual(error.exception.reason, 'boot_unavailable')
+
+    def test_slow_prompt_is_accepted_without_repeating_the_password(self):
+        boot = power.Boot.__new__(power.Boot)
+        boot.target = {'luks_uuid': UUID}
+        prompt = 'Please enter passphrase for disk luks-' + UUID + ': '
+        script = 'import sys,time;time.sleep(.15);sys.stdout.write(' + repr(prompt) + ');sys.stdout.flush();value=sys.stdin.readline().strip();sys.exit(0 if value==' + repr(self.secret) + ' else 1)'
+        boot.args = lambda _: [sys.executable, '-u', '-c', script]
+        boot.unlock(self.secret, timeout=2)
+
+    def test_timeout_after_sending_the_password_remains_uncertain(self):
+        boot = power.Boot.__new__(power.Boot)
+        boot.target = {'luks_uuid': UUID}
+        prompt = 'Please enter passphrase for disk luks-' + UUID + ': '
+        script = 'import sys,time;sys.stdout.write(' + repr(prompt) + ');sys.stdout.flush();sys.stdin.readline();time.sleep(10)'
+        boot.args = lambda _: [sys.executable, '-u', '-c', script]
+        with self.assertRaises(power.Failure) as error:
+            boot.unlock(self.secret, timeout=.2)
+        self.assertEqual(error.exception.reason, 'unlock_unconfirmed')
 
 
 class CredentialFieldTests(unittest.TestCase):

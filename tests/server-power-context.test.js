@@ -41,11 +41,13 @@ test('power progress requires exact connection session MCP generation user organ
 function componentHarness(){
   const text=fs.readFileSync('apps/web/src/components/ServerPower.vue','utf8').match(/<script setup[^>]*>([\s\S]*?)<\/script>/)[1]
   const ast=ts.createSourceFile('power.ts',text,ts.ScriptTarget.ES2022,true,ts.ScriptKind.TS)
-  const functions=ast.statements.filter(node=>ts.isFunctionDeclaration(node)&&['execution','execute','confirm','importConfiguration'].includes(node.name?.text)).map(node=>node.getText(ast)).join('\n')
+  const functions=ast.statements.filter(node=>ts.isFunctionDeclaration(node)&&['execution','execute','confirm','retryStart','importConfiguration'].includes(node.name?.text)).map(node=>node.getText(ast)).join('\n')
   let confirmation,valid=true
   const native={connectionId:'a',connectionGeneration:1,lockEpoch:1,context:{backend:'https://a.test/',user:'same-user',organization:'same-org',generation:2}}
   const selected={identity:{organization:'same-org'},current:()=>valid}
   const calls=[],context={desktopRuntime:true,source:{value:selected},loaded:{value:{server:'same-server',source:JSON.stringify(selected.identity)}},local:{value:{context:native}},data:{value:{profile:{version:7},configuration_current:true,can_edit:true,can_configure:true,name:'A server',address:'1.2.3.4'}},props:{serverId:'same-server'},identity:{value:'/a-key'},viaHost:{value:true},opAccount:{value:'account-a'},generation:1,busy:{value:false},saving:{value:false},blocked:{value:false},error:{value:''},configurationError:{value:''},stage:{value:''},request:{value:''},crypto:{randomUUID:()=> 'request'},localStorage:{setItem:()=>{}},t:key=>key,showSettings:{value:true},q:{notify:()=>{},dialog:()=>({hide(){},onOk(callback){confirmation=callback;return this}})},invoke:async(command,args)=>{calls.push({command,args})},refresh:async()=>{},failure:()=> 'failed'}
+  context.retryable={value:false};context.blockingJob={value:null}
+  context.createServerPowerApi=()=>({reconcile:async(server,job)=>{calls.push({command:'reconcile',server,job})}})
   vm.createContext(context);vm.runInContext(ts.transpileModule(functions,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context)
   return {context,calls,hasConfirmation:()=>!!confirmation,confirm:()=>confirmation(),invalidate:()=>valid=false}
 }
@@ -109,4 +111,34 @@ test('credential import errors remain separate from polling and clear when the u
   stale.context.invoke=async()=>{stale.invalidate();throw new Error('vault_metadata_missing')}
   await stale.context.importConfiguration()
   assert.equal(stale.context.configurationError.value,'')
+})
+
+test('retrying an uncertain start requires confirmation and reconciliation before a new request',async()=>{
+  const h=componentHarness()
+  h.context.retryable.value=true;h.context.blocked.value=true
+  h.context.blockingJob.value={id:'previous-job',action:'start',status:'unknown'}
+  h.context.refresh=async()=>{h.context.blockingJob.value=null;h.context.blocked.value=false;return true}
+  h.context.confirm('start')
+  assert.equal(h.calls.length,0)
+  await h.confirm();await new Promise(resolve=>setImmediate(resolve))
+  assert.deepEqual(h.calls.map(call=>call.command),['reconcile','server_power_run'])
+  assert.equal(h.calls[0].job,'previous-job')
+  assert.equal(h.calls[1].args.action,'start')
+})
+
+test('a failed reconciliation or changed context never sends a retry',async()=>{
+  for(const mode of ['rejected','changed','running','refresh-failed']){
+    const h=componentHarness()
+    h.context.retryable.value=true;h.context.blocked.value=true
+    h.context.blockingJob.value={id:'previous-job',action:'start',status:'unknown'}
+    h.context.createServerPowerApi=()=>({reconcile:async()=>{
+      if(mode==='rejected')throw new Error('failed')
+      if(mode==='changed')h.invalidate()
+    }})
+    h.context.refresh=async()=>mode!=='refresh-failed'
+    h.context.confirm('start')
+    if(mode==='running')h.context.blockingJob.value.status='running'
+    await h.confirm();await new Promise(resolve=>setImmediate(resolve))
+    assert.equal(h.calls.length,0,mode)
+  }
 })

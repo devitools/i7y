@@ -27,6 +27,7 @@ const sourceIdentity=computed(()=>source.value?JSON.stringify(source.value.ident
 let generation=0,timer:ReturnType<typeof setInterval>|undefined,refreshing=false,unlisten:UnlistenFn|undefined,dialog:{hide:()=>unknown}|undefined
 let operationContext:PowerNativeContext|undefined
 const jobs=computed(()=>data.value?.jobs||[]),blockingJob=computed(()=>jobs.value.find((j:any)=>['running','unknown'].includes(j.status))),blocked=computed(()=>!!blockingJob.value),displayed=computed(()=>selectPowerResult(jobs.value))
+const retryable=computed(()=>blockingJob.value?.status==='unknown'&&blockingJob.value.action==='start'&&data.value?.can_configure)
 const remoteUnlockConfigured=computed(()=>!!data.value?.profile?.boot_host_key&&!!data.value?.profile?.luks_uuid)
 const resultPresentation=computed(()=>displayed.value?presentPowerResult(displayed.value,remoteUnlockConfigured.value):null)
 const consoleHref=computed(()=>data.value?.profile?'https://my.snel.com/clientarea/services/cloudvps/'+encodeURIComponent(data.value.profile.service_id)+'/':null)
@@ -80,7 +81,17 @@ async function execute(action:'inspect'|'start'|'shutdown',expected=execution())
 function confirm(action:'start'|'shutdown'){
   const expected=execution()
   if(!expected)return
-  dialog=q.dialog({title:t(action==='start'?'power.start':'power.stop'),message:t(action==='start'?'power.confirmStart':'power.confirmStop')+' '+(data.value?.name||expected.server)+' ('+(data.value?.address||'')+')',cancel:true,persistent:true,ok:{label:t('Confirm'),color:action==='shutdown'?'negative':'primary'}}).onOk(()=>{dialog=undefined;if(expected.generation===generation&&expected.source.current())void execute(action,expected)})
+  const retryJob=action==='start'&&retryable.value?blockingJob.value.id:''
+  dialog=q.dialog({title:t(retryJob?'power.retryStart':action==='start'?'power.start':'power.stop'),message:t(retryJob?'power.confirmRetryStart':action==='start'?'power.confirmStart':'power.confirmStop')+' '+(data.value?.name||expected.server)+' ('+(data.value?.address||'')+')',cancel:true,persistent:true,ok:{label:t('Confirm'),color:action==='shutdown'?'negative':'primary'}}).onOk(()=>{dialog=undefined;if(expected.generation===generation&&expected.source.current()){if(retryJob)void retryStart(expected,retryJob);else void execute(action,expected)}})
+}
+async function retryStart(expected:Execution,jobId:string){
+  if(expected.generation!==generation||expected.server!==props.serverId||!expected.source.current()||busy.value||saving.value||!data.value?.can_configure||blockingJob.value?.id!==jobId||blockingJob.value.status!=='unknown')return
+  busy.value=true;error.value=''
+  let reconciled=false
+  try{await createServerPowerApi(expected.source).reconcile(expected.server,jobId);if(expected.generation===generation&&expected.source.current())reconciled=await refresh()}
+  catch(cause){if(expected.generation===generation&&expected.source.current())error.value=failure(cause)}
+  finally{if(expected.generation===generation)busy.value=false}
+  if(reconciled&&!blocked.value)await execute('start',expected)
 }
 async function importConfiguration(){
   const current=generation,selected=source.value,server=props.serverId,context=local.value.context
@@ -103,7 +114,7 @@ function reconcile(job:any){const current=generation,selected=source.value,serve
       <p v-if="!data.configuration_current" class="text-grey-7">{{t('power.notConfigured')}}</p>
       <q-btn v-if="!data.configuration_current&&data.can_configure&&!showSettings" flat no-caps icon="key" :label="t('power.loadConfiguration')" class="q-mb-md" :loading="saving" :disable="busy||blocked" @click="data.configuration?importConfiguration():showSettings=true"/>
       <div class="row q-gutter-sm items-center">
-        <q-btn unelevated no-caps color="primary" icon="power_settings_new" :label="t('power.start')" :disable="!local.supported||!data.configuration_current||!data.can_edit||busy||saving||blocked" @click="confirm('start')"/>
+        <q-btn unelevated no-caps color="primary" icon="power_settings_new" :label="t(retryable?'power.retryStart':'power.start')" :disable="!local.supported||!data.configuration_current||!data.can_edit||busy||saving||blocked&&!retryable" @click="confirm('start')"/>
         <q-btn outline no-caps color="negative" icon="power_settings_new" :label="t('power.stop')" :disable="!local.supported||!data.configuration_current||!data.can_edit||busy||saving||blocked" @click="confirm('shutdown')"/>
         <q-btn flat no-caps icon="refresh" :label="t('power.inspect')" :disable="!local.supported||!data.configuration_current||!data.can_edit||busy||saving" @click="execute('inspect')"/>
         <q-btn v-if="consoleHref&&(!resultPresentation?.console||busy)" flat no-caps icon="open_in_new" :label="t('power.console')" :href="consoleHref" target="_blank" rel="noopener noreferrer"/>
@@ -111,10 +122,10 @@ function reconcile(job:any){const current=generation,selected=source.value,serve
       <p v-if="busy" role="status" aria-live="polite" class="q-mt-md q-mb-none"><q-spinner class="q-mr-sm" color="primary"/>{{t('power.stage.'+stage)}}</p>
       <div v-else-if="displayed&&resultPresentation" class="power-result q-mt-md" :class="'power-result--'+resultPresentation.tone" role="status" aria-live="polite">
         <q-icon :name="resultPresentation.icon" :color="resultPresentation.tone" size="24px" class="power-result-icon"/>
-        <div class="power-result-content"><strong>{{t(resultPresentation.title)}}</strong><p v-if="resultPresentation.detail">{{t(resultPresentation.detail)}}</p><span class="power-result-time">{{t('power.lastChecked')}} {{date(displayed.updated||'')}}</span></div>
-        <div v-if="resultPresentation.console&&consoleHref||displayed.status==='unknown'&&data.can_configure" class="power-result-actions">
+        <div class="power-result-content"><strong>{{t(resultPresentation.title)}}</strong><p v-if="resultPresentation.detail">{{t(retryable?'power.retryHelp':resultPresentation.detail)}}</p><p v-if="blockingJob?.status==='unknown'&&displayed!==blockingJob">{{t('power.previousUnconfirmed')}}</p><span class="power-result-time">{{t('power.lastChecked')}} {{date(displayed.updated||'')}}</span></div>
+        <div v-if="resultPresentation.console&&consoleHref||blockingJob?.status==='unknown'&&data.can_configure&&!retryable" class="power-result-actions">
           <q-btn v-if="resultPresentation.console&&consoleHref" unelevated no-caps color="primary" icon="open_in_new" :label="t('power.openConsole')" :href="consoleHref" target="_blank" rel="noopener noreferrer"/>
-          <q-btn v-if="displayed.status==='unknown'&&data.can_configure" flat no-caps :label="t('power.reconcile')" @click="reconcile(displayed)"/>
+          <q-btn v-if="blockingJob?.status==='unknown'&&data.can_configure&&!retryable" flat no-caps :label="t('power.reconcile')" @click="reconcile(blockingJob)"/>
         </div>
       </div>
     </q-card-section>
