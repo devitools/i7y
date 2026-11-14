@@ -129,7 +129,7 @@ struct Message { kind: String, stage: String, status: Option<String>, reason: Op
 
 fn message(line: &str) -> Result<Message, String> {
     let value: Message = serde_json::from_str(line).map_err(|_| "operation_interrupted")?;
-    if !["progress", "result"].contains(&value.kind.as_str()) || !["checking_provider", "power_on_requested", "power_off_requested", "waiting_for_boot", "checking_boot", "unlocking_disk", "awaiting_agent", "powered_off", "requires_console", "provider_on", "provider_off", "unknown", "failed"].contains(&value.stage.as_str()) || value.status.as_ref().is_some_and(|s|!["observed", "failed", "unknown", "powered_off", "requires_console", "awaiting_agent"].contains(&s.as_str())) || value.reason.as_ref().is_some_and(|s|!["provider_unavailable", "provider_rejected", "provider_target_missing", "vault_unavailable", "vault_unsupported", "boot_unavailable", "boot_identity_mismatch", "disk_key_rejected", "unlock_unconfirmed", "runtime_unavailable", "context_changed", "operation_interrupted", "invalid_target", "agent_timeout"].contains(&s.as_str())) { return Err("operation_interrupted".into()); }
+    if !["progress", "result"].contains(&value.kind.as_str()) || !["checking_provider", "power_on_requested", "power_off_requested", "waiting_for_boot", "checking_boot", "unlocking_disk", "awaiting_agent", "powered_off", "requires_console", "provider_on", "provider_off", "disk_locked", "unknown", "failed"].contains(&value.stage.as_str()) || value.status.as_ref().is_some_and(|s|!["observed", "failed", "unknown", "powered_off", "requires_console", "awaiting_agent"].contains(&s.as_str())) || value.reason.as_ref().is_some_and(|s|!["provider_unavailable", "provider_rejected", "provider_target_missing", "vault_unavailable", "vault_unsupported", "boot_unavailable", "boot_identity_mismatch", "disk_key_rejected", "unlock_unconfirmed", "runtime_unavailable", "context_changed", "operation_interrupted", "invalid_target", "agent_timeout"].contains(&s.as_str())) { return Err("operation_interrupted".into()); }
     Ok(value)
 }
 
@@ -378,6 +378,7 @@ mod tests {
     fn runner_output_is_limited_to_public_states() {
         assert!(message(r#"{"kind":"progress","stage":"unlocking_disk"}"#).is_ok());
         assert!(message(r#"{"kind":"result","stage":"awaiting_agent","status":"awaiting_agent"}"#).is_ok());
+        assert!(message(r#"{"kind":"result","stage":"disk_locked","status":"observed"}"#).is_ok());
         assert!(message(r#"{"kind":"result","stage":"awaiting_agent","status":"recovered"}"#).is_err());
         assert!(message(r#"{"kind":"result","stage":"failed","status":"failed","reason":"secret value"}"#).is_err());
         assert!(message(r#"{"kind":"progress","stage":"unlocking_disk","password":"secret"}"#).is_err());

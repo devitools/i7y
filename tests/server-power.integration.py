@@ -205,6 +205,12 @@ def main(runtime):
     snapshot.update(sample_id=secrets.token_hex(16), observed_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
     call('/api/i7y/telemetry/v1/snapshots', 'POST', snapshot, agent)
     assert call(path, token=reader, org=org)['jobs'][0]['status'] == 'recovered'
+    locked = call(path + '/jobs', 'POST', {**body, 'request_id': str(uuid.uuid4()), 'action': 'inspect'}, owner, org, 201)
+    call(path + '/jobs/' + locked['id'] + '/finish', 'POST', {'status': 'observed', 'stage': 'disk_locked'}, owner, org)
+    snapshot.update(sample_id=secrets.token_hex(16), observed_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
+    call('/api/i7y/telemetry/v1/snapshots', 'POST', snapshot, agent)
+    inspection_result = next(job for job in call(path, token=reader, org=org)['jobs'] if job['id'] == locked['id'])
+    assert inspection_result['status'] == 'observed' and inspection_result['stage'] == 'disk_locked'
     console_job = call(path + '/jobs', 'POST', {**body, 'request_id': str(uuid.uuid4())}, editor, org, 201)
     call(path + '/jobs/' + console_job['id'] + '/finish', 'POST', {'status': 'requires_console', 'stage': 'requires_console', 'reason': 'boot_unavailable'}, editor, org)
     assert call(path, token=reader, org=org)['jobs'][0]['status'] == 'requires_console'

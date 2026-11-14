@@ -118,6 +118,12 @@ mutation is not retried. Another mutation remains blocked until an administrator
 inspects the provider console and explicitly reconciles the operation. Reconciliation
 does not assert infrastructure recovery.
 
+**Check SNEL status** reports the current power observation separately from a previous
+startup result. With remote unlock configured, it also queries the pinned boot endpoint
+to detect a locked disk, without reading or sending the disk password. Power on alone
+does not confirm operating-system readiness. Each result displays its own observation
+time; a later inspection cannot refresh the timestamp of an earlier startup success.
+
 Ending the unlock SSH session only advances the operation to **Awaiting agent**.
 Recovery requires a newly accepted telemetry observation after the operation began.
 Older replayed samples cannot establish recovery. Existing incident evaluation owns

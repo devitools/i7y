@@ -188,6 +188,33 @@ class PowerTests(unittest.TestCase):
         self.assertEqual(self.provider.changes, [])
         self.read_vault.assert_not_called()
 
+    def test_inspection_reports_locked_disk_without_reading_or_sending_password(self):
+        self.provider.power = True
+        self.assertEqual(self.run_action('inspect'), {'status': 'observed', 'stage': 'disk_locked'})
+        self.assertEqual(self.provider.changes, [])
+        self.assertEqual(self.boot.reads, 1)
+        self.assertEqual(self.boot.secrets, [])
+        self.assertTrue(self.boot.closed)
+        self.read_vault.assert_not_called()
+
+    def test_inspection_without_boot_access_only_confirms_provider_power(self):
+        self.provider.power = True
+        self.boot.available = False
+        self.assertEqual(self.run_action('inspect'), {'status': 'observed', 'stage': 'provider_on'})
+        self.assertEqual(self.provider.changes, [])
+        self.assertEqual(self.boot.secrets, [])
+        self.assertTrue(self.boot.closed)
+        self.read_vault.assert_not_called()
+
+    def test_inspection_without_remote_unlock_configuration_does_not_probe_boot(self):
+        self.provider.power = True
+        request = copy.deepcopy(REQUEST)
+        request['target']['boot_host_key'] = ''
+        request['target']['luks_uuid'] = ''
+        self.assertEqual(self.run_action('inspect', request=request), {'status': 'observed', 'stage': 'provider_on'})
+        self.assertEqual(self.boot.reads, 0)
+        self.read_vault.assert_not_called()
+
     def test_injected_target_values_are_rejected_before_provider_access(self):
         for key, value in [('address', '192.0.2.10; touch /tmp/invalid'), ('service_id', '../other'), ('vm_id', '1/start'), ('boot_host_key', 'ssh-ed25519 AAAA\nHost *')]:
             request = copy.deepcopy(REQUEST)

@@ -10,11 +10,13 @@ export function selectPowerResult(jobs:PowerJob[]):PowerJob|undefined {
   const blocking=jobs.find(job=>['running','unknown'].includes(job.status))
   if(blocking)return blocking
   const latest=jobs[0],operation=jobs.find(job=>job.action!=='inspect'&&job.status!=='reconciled')
-  if(latest?.stage==='provider_on'&&operation&&['requires_console','awaiting_agent','recovered'].includes(operation.status))return operation
+  if(latest?.stage==='provider_on'&&operation&&['requires_console','awaiting_agent'].includes(operation.status))return operation
   return latest
 }
 
 export function presentPowerResult(job:PowerJob,remoteUnlockConfigured:boolean) {
+  if(job.action==='inspect'&&job.stage==='disk_locked')return {tone:'warning',icon:'lock',title:'power.result.diskLocked',detail:'power.result.diskLockedHelp',console:true}
+  if(job.action==='inspect'&&job.stage==='provider_on')return {tone:'info',icon:'power_settings_new',title:'power.stage.provider_on',detail:'power.result.providerOnHelp',console:false}
   if(job.status==='recovered')return {tone:'positive',icon:'check_circle',title:'power.result.ready',detail:'power.result.readyHelp',console:false}
   if(job.status==='requires_console')return {tone:'warning',icon:'lock',title:'power.result.pendingUnlock',detail:job.reason==='boot_unavailable'&&!remoteUnlockConfigured?'power.result.unlockNotConfigured':'power.result.consoleHelp',console:true}
   if(job.status==='awaiting_agent')return {tone:'info',icon:'hourglass_empty',title:'power.result.awaitingConfirmation',detail:'power.result.awaitingConfirmationHelp',console:false}

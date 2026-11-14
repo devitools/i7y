@@ -311,6 +311,14 @@ def run(request, provider_factory=Provider, boot_factory=Boot, sleep=time.sleep,
     provider.login()
     power = provider.state()
     if action == 'inspect':
+        if power and target.get('boot_host_key') and target.get('luks_uuid'):
+            emit(kind='progress', stage='checking_boot')
+            boot = boot_factory(request)
+            try:
+                if boot.status():
+                    return {'status': 'observed', 'stage': 'disk_locked'}
+            finally:
+                boot.close()
         return {'status': 'observed', 'stage': 'provider_on' if power else 'provider_off'}
     if action == 'shutdown':
         if power:

@@ -39,6 +39,22 @@ test('power inspections preserve the pending startup while off observations supe
   assert.equal(selectPowerResult([on,shutdown,pending]),on)
 })
 
+test('a new inspection never reuses the success or timestamp of an older startup',()=>{
+  const recovered={action:'start',status:'recovered',stage:'agent_connected',updated:'2026-11-14T06:58:08Z'}
+  const on={action:'inspect',status:'observed',stage:'provider_on',updated:'2026-11-14T07:08:14Z'}
+  const result=selectPowerResult([on,recovered])
+  assert.equal(result,on)
+  assert.equal(result.updated,on.updated)
+  assert.equal(presentPowerResult(result,true).tone,'info')
+  assert.equal(presentPowerResult(result,true).detail,'power.result.providerOnHelp')
+  const locked={...on,stage:'disk_locked'}
+  assert.equal(selectPowerResult([locked,recovered]),locked)
+  const view=presentPowerResult(locked,true)
+  assert.equal(view.tone,'warning')
+  assert.equal(view.title,'power.result.diskLocked')
+  assert.equal(view.console,true)
+})
+
 test('unknown operations and real credential failures retain distinct outcomes',()=>{
   const unknown={action:'start',status:'unknown',stage:'unknown',reason:'provider_unavailable'}
   assert.equal(selectPowerResult([{action:'inspect',status:'observed',stage:'provider_on'},unknown]),unknown)

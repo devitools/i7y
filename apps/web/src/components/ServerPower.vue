@@ -26,7 +26,7 @@ const source=computed(()=>{connectionRevision.value;activeConnectionId.value;act
 const sourceIdentity=computed(()=>source.value?JSON.stringify(source.value.identity):'')
 let generation=0,timer:ReturnType<typeof setInterval>|undefined,refreshing=false,unlisten:UnlistenFn|undefined,dialog:{hide:()=>unknown}|undefined
 let operationContext:PowerNativeContext|undefined
-const jobs=computed(()=>data.value?.jobs||[]),latest=computed(()=>jobs.value[0]),blockingJob=computed(()=>jobs.value.find((j:any)=>['running','unknown'].includes(j.status))),blocked=computed(()=>!!blockingJob.value),displayed=computed(()=>selectPowerResult(jobs.value))
+const jobs=computed(()=>data.value?.jobs||[]),blockingJob=computed(()=>jobs.value.find((j:any)=>['running','unknown'].includes(j.status))),blocked=computed(()=>!!blockingJob.value),displayed=computed(()=>selectPowerResult(jobs.value))
 const remoteUnlockConfigured=computed(()=>!!data.value?.profile?.boot_host_key&&!!data.value?.profile?.luks_uuid)
 const resultPresentation=computed(()=>displayed.value?presentPowerResult(displayed.value,remoteUnlockConfigured.value):null)
 const consoleHref=computed(()=>data.value?.profile?'https://my.snel.com/clientarea/services/cloudvps/'+encodeURIComponent(data.value.profile.service_id)+'/':null)
@@ -111,7 +111,7 @@ function reconcile(job:any){const current=generation,selected=source.value,serve
       <p v-if="busy" role="status" aria-live="polite" class="q-mt-md q-mb-none"><q-spinner class="q-mr-sm" color="primary"/>{{t('power.stage.'+stage)}}</p>
       <div v-else-if="displayed&&resultPresentation" class="power-result q-mt-md" :class="'power-result--'+resultPresentation.tone" role="status" aria-live="polite">
         <q-icon :name="resultPresentation.icon" :color="resultPresentation.tone" size="24px" class="power-result-icon"/>
-        <div class="power-result-content"><strong>{{t(resultPresentation.title)}}</strong><p v-if="resultPresentation.detail">{{t(resultPresentation.detail)}}</p><span class="power-result-time">{{t('power.lastChecked')}} {{date(latest?.updated||displayed.updated||'')}}</span></div>
+        <div class="power-result-content"><strong>{{t(resultPresentation.title)}}</strong><p v-if="resultPresentation.detail">{{t(resultPresentation.detail)}}</p><span class="power-result-time">{{t('power.lastChecked')}} {{date(displayed.updated||'')}}</span></div>
         <div v-if="resultPresentation.console&&consoleHref||displayed.status==='unknown'&&data.can_configure" class="power-result-actions">
           <q-btn v-if="resultPresentation.console&&consoleHref" unelevated no-caps color="primary" icon="open_in_new" :label="t('power.openConsole')" :href="consoleHref" target="_blank" rel="noopener noreferrer"/>
           <q-btn v-if="displayed.status==='unknown'&&data.can_configure" flat no-caps :label="t('power.reconcile')" @click="reconcile(displayed)"/>

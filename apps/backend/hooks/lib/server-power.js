@@ -1,5 +1,5 @@
 const actions=['inspect','start','shutdown']
-const stages=['checking_provider','power_on_requested','power_off_requested','waiting_for_boot','checking_boot','unlocking_disk','awaiting_agent','powered_off','requires_console','provider_on','provider_off','unknown','failed']
+const stages=['checking_provider','power_on_requested','power_off_requested','waiting_for_boot','checking_boot','unlocking_disk','awaiting_agent','powered_off','requires_console','provider_on','provider_off','disk_locked','unknown','failed']
 const reasons=['','provider_unavailable','provider_rejected','provider_target_missing','vault_unavailable','vault_unsupported','boot_unavailable','boot_identity_mismatch','disk_key_rejected','unlock_unconfirmed','runtime_unavailable','context_changed','operation_interrupted','invalid_target','agent_timeout']
 function fail(status,message){throw new ApiError(status,message)}
 function rows(app,name,filter,params={},sort='',limit=100){return app.findRecordsByFilter(name,filter,sort,limit,0,params)}
@@ -90,7 +90,7 @@ function handle(e,operation){let result;e.app.runInTransaction(app=>{
   if(operation==='finish'){
     const allowed=job.getString('action')==='inspect'?['observed','failed']:job.getString('action')==='shutdown'?['powered_off','unknown','failed']:['awaiting_agent','requires_console','unknown','failed']
     if(!allowed.includes(body.status))fail(400,'Invalid action result')
-    const pairs={observed:['provider_on','provider_off'],powered_off:['powered_off'],unknown:['unknown'],failed:['failed'],requires_console:['requires_console'],awaiting_agent:['awaiting_agent']}
+    const pairs={observed:['provider_on','provider_off','disk_locked'],powered_off:['powered_off'],unknown:['unknown'],failed:['failed'],requires_console:['requires_console'],awaiting_agent:['awaiting_agent']}
     if(!pairs[body.status].includes(body.stage))fail(400,'Result stage does not match the action outcome')
     job.set('status',body.status);if(body.status!=='awaiting_agent')job.set('finished_at',new Date().toISOString())
   }
