@@ -8,7 +8,9 @@ test('all interface messages exist in every language and use workspace terminolo
   const keys = [...source.matchAll(/\bt\('([^']+)'\)/g)].map(match => match[1])
   for (const language of ['en', 'pt-BR', 'uk']) {
     for (const key of keys) assert.ok(messages[language][key], `${language}: ${key}`)
-    for (const value of Object.values(messages[language])) assert.doesNotMatch(value, /\baccounts?\b/i)
+    for (const [key,value] of Object.entries(messages[language])) {
+      if(!key.startsWith('vault.')&&key!=='power.inventoryHelp')assert.doesNotMatch(value, /\baccounts?\b/i)
+    }
   }
   assert.doesNotMatch(source, /class="sidebar-footer"/)
 })

@@ -161,6 +161,82 @@ fn run(app: &tauri::AppHandle, context: &PowerContext, path: &str, payload: &Val
 
 fn identifier(value: &str) -> bool { value.len() == 15 && value.bytes().all(|b|b.is_ascii_lowercase() || b.is_ascii_digit()) }
 
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct VaultConfiguration {
+    service_id: String,
+    vm_id: String,
+    boot_port: u16,
+    boot_host_key: String,
+    luks_uuid: String,
+}
+
+fn configuration_message(bytes: &[u8]) -> Result<VaultConfiguration, String> {
+    let value: Value = serde_json::from_slice(bytes).map_err(|_| "vault_metadata_invalid")?;
+    if value["kind"] == "result" {
+        let reason = value["reason"].as_str().unwrap_or("");
+        return Err(if ["vault_unavailable","vault_metadata_missing","vault_metadata_invalid","vault_target_mismatch","runtime_unavailable","invalid_target"].contains(&reason) {reason} else {"vault_metadata_invalid"}.into());
+    }
+    if value["kind"] != "configuration" || value.as_object().map_or(true,|object|object.len()!=2) {return Err("vault_metadata_invalid".into())}
+    let profile: VaultConfiguration = serde_json::from_value(value["profile"].clone()).map_err(|_| "vault_metadata_invalid")?;
+    let numeric = |value: &str| !value.starts_with('0') && !value.is_empty() && value.len() <= 16 && value.bytes().all(|c|c.is_ascii_digit());
+    if !numeric(&profile.service_id) || !numeric(&profile.vm_id) || profile.boot_port==0 || profile.boot_host_key.is_empty()!=profile.luks_uuid.is_empty() {return Err("vault_metadata_invalid".into())}
+    if !profile.boot_host_key.is_empty() {
+        i7y_core::ssh::canonical_key(&profile.boot_host_key).map_err(|_| "vault_metadata_invalid")?;
+        let uuid=&profile.luks_uuid;
+        if uuid.len()!=36 || !uuid.bytes().enumerate().all(|(i,c)|if [8,13,18,23].contains(&i) {c==b'-'} else {c.is_ascii_hexdigit()}) {return Err("vault_metadata_invalid".into())}
+    }
+    Ok(profile)
+}
+
+fn read_configuration(app: &tauri::AppHandle, context: &PowerContext, payload: Value) -> Result<VaultConfiguration, String> {
+    let python=["/opt/homebrew/bin/python3","/usr/local/bin/python3","/usr/bin/python3"].iter().find(|path|std::path::Path::new(path).is_file()).ok_or("runtime_unavailable")?;
+    let mut command=Command::new(python);
+    command.args(["-I","-u","-c",RUNNER]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    #[cfg(unix)] {use std::os::unix::process::CommandExt;command.process_group(0);}
+    check_context(app,context)?;
+    let mut child=command.spawn().map_err(|_|"runtime_unavailable")?;
+    let result=(||{
+        let mut input=child.stdin.take().ok_or("vault_unavailable")?;
+        let bytes=serde_json::to_vec(&payload).map_err(|_|"invalid_target")?;
+        if bytes.len()>32768 {return Err("invalid_target".into())}
+        input.write_all(&bytes).and_then(|_|input.write_all(b"\n")).map_err(|_|"vault_unavailable")?;drop(input);
+        let stdout=child.stdout.take().ok_or("vault_unavailable")?;
+        let (sender,receiver)=mpsc::sync_channel(1);
+        std::thread::spawn(move||{let mut bytes=Vec::new();let result=stdout.take(32769).read_to_end(&mut bytes).map(|_|bytes);let _=sender.send(result);});
+        let deadline=Instant::now()+Duration::from_secs(150);
+        while Instant::now()<deadline {
+            check_context(app,context)?;
+            match receiver.recv_timeout(Duration::from_millis(200)) {
+                Ok(Ok(bytes)) if bytes.len()<=32768=>return configuration_message(&bytes),
+                Err(mpsc::RecvTimeoutError::Timeout)=>{},
+                _=>return Err("vault_unavailable".into()),
+            }
+        }
+        Err("vault_unavailable".into())
+    })();
+    #[cfg(unix)] unsafe {libc::kill(-(child.id() as i32),libc::SIGKILL);}
+    let _=child.kill();let _=child.wait();result
+}
+
+#[tauri::command]
+pub async fn server_power_import_configuration(app: tauri::AppHandle, server_id: String, expected_context: PowerContext) -> Result<Value, String> {
+    if !cfg!(target_os="macos") || !identifier(&server_id) {return Err("invalid_target".into())}
+    let path=format!("api/i7y/server-power/v1/servers/{server_id}");
+    let data=api(&app,&expected_context,"GET",&path,None).await?;
+    if data["can_configure"]!=true || data["provider_supported"]!=true {return Err("invalid_target".into())}
+    let configuration=&data["configuration"];
+    if !configuration.is_object() {return Err("vault_reference_missing".into())}
+    let payload=json!({"action":"configuration","target":{"address":data["address"],"disk_credential":configuration["disk_credential"]}});
+    let handle=app.clone();let context=expected_context.clone();
+    let profile=tauri::async_runtime::spawn_blocking(move||read_configuration(&handle,&context,payload)).await.map_err(|_|"vault_unavailable")??;
+    check_context(&app,&expected_context)?;
+    let mut body=serde_json::to_value(profile).map_err(|_|"vault_metadata_invalid")?;
+    body["version"]=data["profile"]["version"].as_u64().unwrap_or(0).into();
+    body["credential_binding"]=configuration["credential_binding"].clone();
+    api(&app,&expected_context,"PUT",&path,Some(body)).await
+}
+
 #[tauri::command]
 pub async fn server_power_run(app: tauri::AppHandle, organization: String, server_id: String, action: String, request_id: String, version: u64, identity_file: String, via_automation_host: bool, op_account: String, expected_context: PowerContext) -> Result<Value, String> {
     if !cfg!(target_os = "macos") { return Err("runtime_unavailable".into()); }
@@ -175,7 +251,8 @@ pub async fn server_power_run(app: tauri::AppHandle, organization: String, serve
     let path = format!("{base}/{id}");
     let result = (|| {
         let target = &job["target"];
-        let mut payload = json!({"action":action,"target":target,"identity_file":identity_file,"op_account":op_account});
+        let _ = op_account;
+        let mut payload = json!({"action":action,"target":target,"identity_file":identity_file});
         if action == "start" && target["boot_host_key"].as_str().is_some_and(|k|!k.is_empty()) {
             i7y_core::ssh::canonical_key(target["boot_host_key"].as_str().ok_or("invalid_target")?).map_err(|_| "invalid_target")?;
             let identity = PathBuf::from(&identity_file);
@@ -203,6 +280,18 @@ pub async fn server_power_run(app: tauri::AppHandle, organization: String, serve
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn vault_configuration_filters_secrets_and_rejects_ambiguous_payloads() {
+        let profile=json!({"service_id":"123","vm_id":"456","boot_port":2222,"boot_host_key":"","luks_uuid":""});
+        let parsed=configuration_message(&serde_json::to_vec(&json!({"kind":"configuration","profile":profile})).unwrap()).unwrap();
+        assert_eq!(parsed.vm_id,"456");
+        for extra in [json!({"password":"secret"}),json!({"vm_id":"../other"}),json!({"boot_port":0}),json!({"luks_uuid":"00000000-0000-0000-0000-000000000000"})] {
+            let mut value=profile.clone();for (key,value_part) in extra.as_object().unwrap() {value[key]=value_part.clone();}
+            assert!(configuration_message(&serde_json::to_vec(&json!({"kind":"configuration","profile":value})).unwrap()).is_err());
+        }
+        let error=configuration_message(br#"{"kind":"result","status":"failed","stage":"failed","reason":"vault_metadata_missing"}"#).err().unwrap();
+        assert_eq!(error,"vault_metadata_missing");
+    }
     fn prepared() -> (crate::connections::Registry, crate::mcp::Inner, ExpectedSource) {
         let backend = crate::backend::normalize_backend("https://a.test/").unwrap();
         let mut registry = crate::connections::decode(None, Some(&backend)).unwrap();

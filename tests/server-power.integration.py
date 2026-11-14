@@ -135,11 +135,13 @@ def main(runtime):
     org = create('organizations', {'name': 'Power fixture'})['id']
     other_org = create('organizations', {'name': 'Power isolation'})['id']
     owner, editor, reader, outsider = person('admin', org), person('editor', org), person('reader', org), person('admin', other_org)
-    credential = {'vault': 'Fixture vault', 'item': 'Fixture reference'}
+    credential = {'provider': '1password', 'account': 'fixture.example.com', 'vault': 'Fixture vault', 'item': 'Fixture reference'}
     workspace = create('workspaces', {'organization': org, 'login': 'fixture@example.test', 'provider': 'SNEL', 'credential': credential})
     server = create('servers', {'workspace': workspace['id'], 'name': 'fixture.example.test', 'ip': '192.0.2.10', 'type': 'VPS', 'credential': credential})['id']
     path = '/api/i7y/server-power/v1/servers/' + server
-    profile = {'version': 0, 'service_id': '123', 'vm_id': '456', 'boot_port': 2222, 'boot_host_key': '', 'luks_uuid': ''}
+    configuration = call(path, token=owner, org=org)['configuration']
+    assert configuration['disk_credential'] == credential
+    profile = {'credential_binding': configuration['credential_binding'], 'version': 0, 'service_id': '123', 'vm_id': '456', 'boot_port': 2222, 'boot_host_key': '', 'luks_uuid': ''}
     call(path, expected=401)
     call(path, token=outsider, org=org, expected=403)
     call(path, token=reader, org=other_org, expected=403)
@@ -148,11 +150,22 @@ def main(runtime):
     call(path, 'PUT', {**profile, 'password': 'must-never-be-stored'}, owner, org, 400)
     call(path, 'PUT', profile, owner, org)
     alias = create('servers', {'workspace': workspace['id'], 'name': 'alias.example.test', 'ip': '192.0.2.10', 'type': 'VPS', 'credential': credential})['id']
-    call('/api/i7y/server-power/v1/servers/' + alias, 'PUT', profile, owner, org, 409)
+    alias_path = '/api/i7y/server-power/v1/servers/' + alias
+    alias_configuration = call(alias_path, token=owner, org=org)['configuration']
+    call(alias_path, 'PUT', {**profile, 'credential_binding': alias_configuration['credential_binding']}, owner, org, 409)
     call(path, 'PUT', profile, owner, org, 409)
     call('/api/collections/server_power_profiles/records', token=owner, expected=403)
     data = call(path, token=editor, org=org)
-    assert data['profile']['version'] == 1 and 'password' not in json.dumps(data)
+    assert data['profile']['version'] == 1 and '"password"' not in json.dumps(data)
+    assert data['configuration_current'] is True
+    call(path, 'PUT', {**profile, 'version': 1, 'credential_binding': '0' * 64}, owner, org, 409)
+    call('/api/collections/servers/records/' + server, 'PATCH', {'credential': {**credential, 'password': 'not-a-reference'}}, owner, org, 400)
+    changed_credential = {**credential, 'account': 'other.example.com'}
+    call('/api/collections/servers/records/' + server, 'PATCH', {'credential': changed_credential}, owner, org)
+    assert call(path, token=owner, org=org)['configuration_current'] is False
+    call(path, 'PUT', {**profile, 'version': 1}, owner, org, 409)
+    call('/api/collections/servers/records/' + server, 'PATCH', {'credential': credential}, owner, org)
+    assert call(path, token=owner, org=org)['configuration_current'] is True
     request_id = str(uuid.uuid4())
     body = {'request_id': request_id, 'action': 'start', 'version': 1}
     call(path + '/jobs', 'POST', body, reader, org, 403)
@@ -204,7 +217,8 @@ def main(runtime):
     call('/api/collections/servers/records/' + server, 'DELETE', token=admin, expected=204)
     replacement = create('servers', {'workspace': workspace['id'], 'name': 'replacement.example.test', 'ip': '192.0.2.10', 'type': 'VPS', 'credential': credential})['id']
     replacement_path = '/api/i7y/server-power/v1/servers/' + replacement
-    call(replacement_path, 'PUT', profile, owner, org)
+    replacement_configuration = call(replacement_path, token=owner, org=org)['configuration']
+    call(replacement_path, 'PUT', {**profile, 'credential_binding': replacement_configuration['credential_binding']}, owner, org)
     assert any(job['id'] == pending['id'] for job in call(replacement_path, token=owner, org=org)['jobs'])
     call(replacement_path + '/jobs', 'POST', {**body, 'request_id': str(uuid.uuid4())}, owner, org, 409)
     call(replacement_path + '/jobs/' + pending['id'] + '/reconcile', 'POST', {'inspected_console': True}, owner, org)

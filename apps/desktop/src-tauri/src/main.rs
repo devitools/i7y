@@ -113,6 +113,7 @@ fn main() {
             controller::diagnose_controller,
             controller::ping_server,
             server_power::server_power_local_settings,
+            server_power::server_power_import_configuration,
             server_power::server_power_run,
             project_copy::project_copy_preview,
             project_copy::project_copy_progress,

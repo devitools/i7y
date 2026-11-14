@@ -8,6 +8,7 @@ import { normalizeBackendUrl } from '../backend-url'
 import { t } from '../i18n'
 import PageHeader from './PageHeader.vue'
 import { repositoryHref, versionControlLabel } from '../project-repository'
+import {vaultReference,savedVaultReference,type VaultReference} from '../vault-reference'
 const desktopCode=ref('')
 const backendUrl=ref(desktopBackend.value)
 const backendValid=computed(()=>{try{return !!normalizeBackendUrl(backendUrl.value)}catch{return false}})
@@ -28,6 +29,7 @@ async function signInWithBrowser() {
   finally {busy.value=false}
 }
 interface ManagementForm {
+  credential?: VaultReference
   email?: string
   password?: string
   login?: string
@@ -81,6 +83,7 @@ async function load() {
     const parent=props.route.parent
     const defaults={workspaces:{login:'',provider:''},servers:{workspace:parent || null,type:'VPS',name:'',product:'',ip:'',status:'ACTIVE',inventory_known:true,sort_order:0},projects:{server:parent || null,name:'',path:'',source_repository_url:'',deployment_branch:'',deployment_template:'',version_control_status:'unknown',sort_order:0},containers:{project:parent || null,name:'',image:'',sort_order:0}}
     form.value={...defaults[props.route.resource],...r}
+    if(['servers','workspaces'].includes(props.route.resource))form.value.credential=vaultReference(r.credential)
     if (deleting.value) {
       const summary=await inventoryScope(props.route.resource,r.id)
       if(!summary)throw new Error('Missing record')
@@ -130,6 +133,7 @@ async function submit() {
     else {
       const fields={workspaces:['login','provider'],servers:['workspace','type','name','product','ip','status','inventory_known','sort_order'],projects:['server','name','path','source_repository_url','deployment_branch','deployment_template','version_control_status','sort_order'],containers:['project','name','image','sort_order']}[props.route.resource]
       const values=Object.fromEntries(fields.map(key=>[key,typeof form.value[key]==='string' ? form.value[key].trim() : form.value[key]]))
+      if(['servers','workspaces'].includes(props.route.resource))values.credential=savedVaultReference(form.value.credential)
       if (props.route.resource==='projects') await management.update('servers',values.server,{inventory_known:true})
       if (props.route.id) await management.update(props.route.resource,props.route.id,values)
       else await management.create(props.route.resource,values)
@@ -137,6 +141,7 @@ async function submit() {
     q.notify({type:'positive',message:t(deleting.value ? 'Record deleted' : 'Record saved')})
     emit('saved',props.route.resource)
   } catch(e) {
+    if(e?.message==='vault.invalidReference'){error.value=t('vault.invalidReference');return}
     if (login.value) error.value=t('Unable to sign in. Check your email and password.')
     else failure(e)
   } finally { busy.value=false }
@@ -200,6 +205,14 @@ async function submit() {
             <q-input v-model="form.name" outlined :label="t('Name')" :rules="[required]" :error="!!fieldErrors.name" :error-message="fieldErrors.name" />
             <q-input v-model="form.image" outlined :label="t('Image')" :rules="[required]" :error="!!fieldErrors.image" :error-message="fieldErrors.image" />
           </template>
+          <section v-if="['servers','workspaces'].includes(route.resource)&&form.credential" class="q-mt-md q-mb-lg">
+            <h2 class="text-subtitle1">{{t('vault.title')}}</h2>
+            <p class="text-caption text-grey-7">{{t(route.resource==='servers'?'vault.serverHelp':'vault.workspaceHelp')}}</p>
+            <q-input model-value="1Password" outlined readonly :label="t('vault.provider')" class="q-mb-md"/>
+            <q-input v-model="form.credential.account" outlined :label="t('vault.account')" :hint="t('vault.accountHelp')" maxlength="240" class="q-mb-md"/>
+            <q-input v-model="form.credential.vault" outlined :label="t('vault.vault')" maxlength="240" class="q-mb-md"/>
+            <q-input v-model="form.credential.item" outlined :label="t('vault.item')" maxlength="240" :error="!!fieldErrors.credential" :error-message="fieldErrors.credential"/>
+          </section>
           <q-input v-if="route.resource!=='workspaces'" v-model.number="form.sort_order" outlined type="number" :label="t('Sort order')" />
         </template>
         <div class="row justify-end q-gutter-sm q-pt-md"><q-btn v-if="!login" flat no-caps :label="t('Cancel')" :disable="busy" @click="emit('back')" /><q-btn v-if="(login && !browserLogin) || (!login && ready)" type="submit" unelevated no-caps :color="deleting?'negative':'primary'" :icon="login?undefined:deleting?'delete':'save'" :label="t(login?'Sign in':deleting?'Delete permanently':'Save')" :loading="busy" /></div>

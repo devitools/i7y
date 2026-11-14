@@ -13,6 +13,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 
 
 class Failure(Exception):
@@ -31,16 +32,34 @@ def executable(name):
     raise Failure('runtime_unavailable')
 
 
-def op_item(reference, otp=False):
+def validate_reference(reference):
+    if not isinstance(reference, dict) or reference.get('provider', '1password') != '1password':
+        raise Failure('invalid_target')
+    for part in ['item', 'vault', 'account']:
+        value = reference.get(part, '')
+        if not isinstance(value, str) or part != 'account' and not value or value.startswith('-') or len(value) > 240 or re.search(r'[\x00-\x1f]', value):
+            raise Failure('invalid_target')
+
+
+def op_item(reference, otp=False, metadata=False):
+    validate_reference(reference)
     args = [executable('op'), 'item', 'get', reference['item'], '--vault', reference['vault']]
     if reference.get('account'):
         args += ['--account', reference['account']]
+    if metadata:
+        args += ['--fields', 'type=STRING,type=URL']
     args += ['--otp'] if otp else ['--format', 'json']
     try:
         result = subprocess.run(args, capture_output=True, timeout=120, check=False)
         if result.returncode or len(result.stdout) > 1048576:
             raise Failure('vault_unavailable')
-        return result.stdout.decode().strip() if otp else json.loads(result.stdout)
+        value = result.stdout.decode().strip() if otp else json.loads(result.stdout)
+        if metadata:
+            if isinstance(value, list):
+                return {'fields': value}
+            if isinstance(value, dict) and 'fields' not in value and ('id' in value or 'label' in value):
+                return {'fields': [value]}
+        return value
     except (OSError, subprocess.TimeoutExpired, UnicodeError, ValueError):
         raise Failure('vault_unavailable') from None
 
@@ -112,24 +131,81 @@ class Provider:
 def validate(request):
     if request.get('action') not in ['inspect', 'start', 'shutdown']:
         raise Failure('invalid_target')
-    if request.get('op_account') and not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.@-]{0,239}', request['op_account']):
-        raise Failure('invalid_target')
     target = request['target']
     ipaddress.ip_address(target['address'])
     for key in ['service_id', 'vm_id']:
-        if not re.fullmatch(r'[1-9][0-9]{0,15}', target[key]):
+        if not isinstance(target[key], str) or not re.fullmatch(r'[1-9][0-9]{0,15}', target[key]):
             raise Failure('invalid_target')
     for key in ['provider_credential', 'disk_credential']:
-        for part in ['item', 'vault']:
-            value = target[key][part]
-            if not isinstance(value, str) or not value or value.startswith('-') or len(value) > 240 or re.search(r'[\x00-\x1f]', value):
-                raise Failure('invalid_target')
+        validate_reference(target[key])
     if not isinstance(target['boot_port'], int) or not 1 <= target['boot_port'] <= 65535:
         raise Failure('invalid_target')
     if target.get('boot_host_key') and not re.fullmatch(r'(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(?:256|384|521)) [A-Za-z0-9+/=]+', target['boot_host_key']):
         raise Failure('invalid_target')
     if target.get('luks_uuid') and not re.fullmatch(r'[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}', target['luks_uuid']):
         raise Failure('invalid_target')
+
+
+def configuration(request):
+    target = request['target']
+    validate_reference(target['disk_credential'])
+    address = ipaddress.ip_address(target['address'])
+    item = op_item(target['disk_credential'], metadata=True)
+    if not isinstance(item, dict):
+        raise Failure('vault_metadata_invalid')
+    fields = item.get('fields', [])
+    if not isinstance(fields, list) or any(not isinstance(entry, dict) for entry in fields):
+        raise Failure('vault_metadata_invalid')
+
+    def metadata(*names):
+        names = {name.lower() for name in names}
+        values = [entry.get('value') for entry in fields if str(entry.get('label', '')).lower() in names or str(entry.get('id', '')).lower() in names]
+        values = list(dict.fromkeys(value.strip() for value in values if isinstance(value, str) and value.strip()))
+        if len(values) > 1:
+            raise Failure('vault_metadata_invalid')
+        return values[0] if values else ''
+
+    service = metadata('SNEL service ID', 'service_id')
+    linked = []
+    urls = item.get('urls', [])
+    if not isinstance(urls, list):
+        raise Failure('vault_metadata_invalid')
+    urls = urls + [{'href': entry.get('value')} for entry in fields if entry.get('type') == 'URL' or str(entry.get('label', '')).lower() in ['website', 'snel service url']]
+    for entry in urls:
+        if not isinstance(entry, dict) or not isinstance(entry.get('href'), str):
+            continue
+        try:
+            url = urllib.parse.urlsplit(entry['href'])
+            match = re.fullmatch(r'/clientarea/services/cloudvps/([1-9][0-9]{0,15})/?', url.path)
+            if url.scheme == 'https' and url.netloc == 'my.snel.com' and match:
+                linked.append(match[1])
+        except ValueError:
+            raise Failure('vault_metadata_invalid') from None
+    services = set(linked + ([service] if service else []))
+    if len(services) > 1:
+        raise Failure('vault_metadata_invalid')
+    service = next(iter(services), '')
+    vm = metadata('SNEL VM ID', 'vm_id')
+    if not service or not vm:
+        raise Failure('vault_metadata_missing')
+    declared = metadata('IP address', 'ip_address')
+    if declared:
+        try:
+            if ipaddress.ip_address(declared) != address:
+                raise Failure('vault_target_mismatch')
+        except ValueError:
+            raise Failure('vault_metadata_invalid') from None
+    port = metadata('Boot SSH port', 'boot_port') or '2222'
+    if not port.isascii() or not port.isdigit():
+        raise Failure('vault_metadata_invalid')
+    result = {'service_id': service, 'vm_id': vm, 'boot_port': int(port), 'boot_host_key': metadata('Verified boot SSH public key', 'boot_host_key'), 'luks_uuid': metadata('LUKS disk UUID', 'luks_uuid').lower()}
+    try:
+        validate({'action': 'inspect', 'target': {**target, **result, 'provider_credential': target['disk_credential']}})
+        if bool(result['boot_host_key']) != bool(result['luks_uuid']):
+            raise Failure('invalid_target')
+    except (Failure, ValueError, KeyError):
+        raise Failure('vault_metadata_invalid') from None
+    return result
 
 
 def quoted(value):
@@ -236,8 +312,6 @@ class Boot:
 def run(request, provider_factory=Provider, boot_factory=Boot, sleep=time.sleep, clock=time.monotonic):
     validate(request)
     target, action = dict(request['target']), request['action']
-    for name in ['provider_credential', 'disk_credential']:
-        target[name] = {**target[name], 'account': request.get('op_account', '')}
     provider = provider_factory(target)
     emit(kind='progress', stage='checking_provider')
     provider.login()
@@ -301,6 +375,9 @@ def main():
         if len(raw) > 32768:
             raise Failure('invalid_target')
         request = json.loads(raw)
+        if request.get('action') == 'configuration':
+            emit(kind='configuration', profile=configuration(request))
+            return
         result = run(request)
     except Failure as error:
         uncertain = error.reason == 'unlock_unconfirmed'

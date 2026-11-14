@@ -7,12 +7,12 @@ import {activeOrganization,activeConnectionId,connectionRevision} from '../api'
 import {desktopRuntime} from '../desktop-backend'
 import {captureServerPowerSource,createServerPowerApi,powerProgressMatches,type PowerNativeContext,type ServerPowerSource} from '../server-power-api'
 import {t,locale} from '../i18n'
+import {managementHash} from '../routes'
 const props=defineProps<{serverId:string}>()
-const q=useQuasar(),data=ref<any>(null),loaded=ref<{server:string;source:string}|null>(null),error=ref(''),busy=ref(false),saving=ref(false),loading=ref(false),stage=ref(''),request=ref(''),formVersion=ref(0)
+const q=useQuasar(),data=ref<any>(null),loaded=ref<{server:string;source:string}|null>(null),error=ref(''),busy=ref(false),saving=ref(false),loading=ref(false),stage=ref(''),request=ref('')
 interface LocalSettings {supported:boolean;identity_file:string;proxy_available:boolean;context?:PowerNativeContext}
 const local=ref<LocalSettings>({supported:false,identity_file:'',proxy_available:false}),identity=ref(''),viaHost=ref(false),showSettings=ref(false)
-const opAccount=ref(localStorage.getItem('i7y.power.opAccount')||'')
-const form=ref({service_id:'',vm_id:'',boot_port:2222,boot_host_key:'',luks_uuid:''})
+const referenceLabel=(value:any)=>value?[value.account,value.vault,value.item].filter(Boolean).join(' / '):t('vault.notLinked')
 const source=computed(()=>{connectionRevision.value;activeConnectionId.value;activeOrganization.value;try{return captureServerPowerSource()}catch{return null}})
 const sourceIdentity=computed(()=>source.value?JSON.stringify(source.value.identity):'')
 let generation=0,timer:ReturnType<typeof setInterval>|undefined,refreshing=false,unlisten:UnlistenFn|undefined,dialog:{hide:()=>unknown}|undefined
@@ -23,22 +23,22 @@ const date=(value:string)=>value?new Date(value.replace(' ','T')).toLocaleString
 function failure(cause:any){const reason=typeof cause==='string'?cause:cause?.message;return typeof reason==='string'&&/^[a-z_]+$/.test(reason)?t('power.error.'+reason):cause?.response?.message||t('power.failed')}
 async function refresh(initial=false){
   const selected=source.value,server=props.serverId
-  if(refreshing||!server||!selected)return
+  if(refreshing||!server||!selected)return false
   const current=generation;refreshing=true
   if(initial)loading.value=true
   try{
     const next=await createServerPowerApi(selected).get(server)
     const settings=desktopRuntime?await invoke<LocalSettings>('server_power_local_settings',{expectedSource:selected.nativeSource}):null
-    if(current!==generation||!selected.current())return
+    if(current!==generation||!selected.current())return false
     data.value=next;loaded.value={server,source:JSON.stringify(selected.identity)};error.value=''
     if(settings){local.value=settings;if(initial)identity.value=settings.identity_file}
-    if(initial){formVersion.value=next.profile?.version||0;form.value={service_id:next.profile?.service_id||'',vm_id:next.profile?.vm_id||'',boot_port:next.profile?.boot_port||2222,boot_host_key:next.profile?.boot_host_key||'',luks_uuid:next.profile?.luks_uuid||''}}
+    return true
   }
-  catch(cause:any){if(current===generation)error.value=cause?.status===404?t('power.backendUnavailable'):failure(cause)}
+  catch(cause:any){if(current===generation)error.value=cause?.status===404?t('power.backendUnavailable'):failure(cause);return false}
   finally{if(current===generation){loading.value=false;refreshing=false}}
 }
 watch(()=>[props.serverId,sourceIdentity.value],async()=>{
-  ++generation;dialog?.hide();dialog=undefined;data.value=null;loaded.value=null;error.value='';busy.value=false;saving.value=false;loading.value=false;stage.value='';request.value='';refreshing=false;formVersion.value=0;showSettings.value=false;operationContext=undefined
+  ++generation;dialog?.hide();dialog=undefined;data.value=null;loaded.value=null;error.value='';busy.value=false;saving.value=false;loading.value=false;stage.value='';request.value='';refreshing=false;showSettings.value=false;operationContext=undefined
   local.value={supported:false,identity_file:'',proxy_available:false};identity.value='';viaHost.value=false
   if(timer)clearInterval(timer);if(unlisten){unlisten();unlisten=undefined}
   const current=generation,selected=source.value
@@ -52,17 +52,17 @@ watch(()=>[props.serverId,sourceIdentity.value],async()=>{
   if(current===generation)timer=setInterval(()=>{if(!busy.value)void refresh()},5000)
 },{immediate:true})
 onUnmounted(()=>{++generation;dialog?.hide();if(timer)clearInterval(timer);unlisten?.()})
-interface Execution {generation:number;source:ServerPowerSource;server:string;version:number;context:PowerNativeContext;identityFile:string;viaAutomationHost:boolean;opAccount:string}
+interface Execution {generation:number;source:ServerPowerSource;server:string;version:number;context:PowerNativeContext;identityFile:string;viaAutomationHost:boolean}
 function execution():Execution|null {
   const selected=source.value
-  if(!selected?.current()||loaded.value?.server!==props.serverId||loaded.value?.source!==JSON.stringify(selected.identity)||!local.value.context||!data.value?.profile||!data.value.can_edit)return null
-  return {generation,source:selected,server:props.serverId,version:data.value.profile.version,context:JSON.parse(JSON.stringify(local.value.context)),identityFile:identity.value,viaAutomationHost:viaHost.value,opAccount:opAccount.value.trim()}
+  if(!selected?.current()||loaded.value?.server!==props.serverId||loaded.value?.source!==JSON.stringify(selected.identity)||!local.value.context||!data.value?.profile||!data.value.configuration_current||!data.value.can_edit)return null
+  return {generation,source:selected,server:props.serverId,version:data.value.profile.version,context:JSON.parse(JSON.stringify(local.value.context)),identityFile:identity.value,viaAutomationHost:viaHost.value}
 }
 async function execute(action:'inspect'|'start'|'shutdown',expected=execution()){
-  if(!expected||expected.generation!==generation||expected.server!==props.serverId||!expected.source.current()||busy.value||action!=='inspect'&&blocked.value)return
+  if(!expected||expected.generation!==generation||expected.server!==props.serverId||!expected.source.current()||busy.value||saving.value||action!=='inspect'&&blocked.value)return
   const current=expected.generation
   busy.value=true;error.value='';stage.value='checking_provider';request.value=crypto.randomUUID();operationContext=expected.context
-  try{localStorage.setItem('i7y.power.opAccount',expected.opAccount);await invoke('server_power_run',{organization:expected.source.identity.organization,serverId:expected.server,action,requestId:request.value,version:expected.version,identityFile:expected.identityFile,viaAutomationHost:expected.viaAutomationHost,opAccount:expected.opAccount,expectedContext:expected.context});if(current===generation&&expected.source.current())await refresh()}
+  try{await invoke('server_power_run',{organization:expected.source.identity.organization,serverId:expected.server,action,requestId:request.value,version:expected.version,identityFile:expected.identityFile,viaAutomationHost:expected.viaAutomationHost,opAccount:'',expectedContext:expected.context});if(current===generation&&expected.source.current())await refresh()}
   catch(cause){if(current===generation&&expected.source.current()){const message=failure(cause);await refresh();if(current===generation)error.value=message}}
   finally{if(current===generation){busy.value=false;stage.value='';operationContext=undefined}}
 }
@@ -71,7 +71,16 @@ function confirm(action:'start'|'shutdown'){
   if(!expected)return
   dialog=q.dialog({title:t(action==='start'?'power.start':'power.stop'),message:t(action==='start'?'power.confirmStart':'power.confirmStop')+' '+(data.value?.name||expected.server)+' ('+(data.value?.address||'')+')',cancel:true,persistent:true,ok:{label:t('Confirm'),color:action==='shutdown'?'negative':'primary'}}).onOk(()=>{dialog=undefined;if(expected.generation===generation&&expected.source.current())void execute(action,expected)})
 }
-async function save(){const current=generation,selected=source.value,server=props.serverId,body={...form.value,version:formVersion.value};if(!selected?.current()||loaded.value?.server!==server||loaded.value?.source!==JSON.stringify(selected.identity))return;saving.value=true;error.value='';try{await createServerPowerApi(selected).save(server,body);if(current===generation&&selected.current()){await refresh(true);showSettings.value=false}}catch(cause){if(current===generation)error.value=failure(cause)}finally{if(current===generation)saving.value=false}}
+async function importConfiguration(){
+  const current=generation,selected=source.value,server=props.serverId,context=local.value.context
+  if(!desktopRuntime||!context||!data.value?.can_configure||!selected?.current()||loaded.value?.server!==server||loaded.value?.source!==JSON.stringify(selected.identity)||busy.value||blocked.value||saving.value)return
+  saving.value=true;error.value=''
+  try{
+    await invoke('server_power_import_configuration',{serverId:server,expectedContext:JSON.parse(JSON.stringify(context))})
+    if(current===generation&&selected.current()&&await refresh(true)&&current===generation&&selected.current()){showSettings.value=false;q.notify({type:'positive',message:t('power.configurationLoaded')})}
+  }catch(cause){if(current===generation&&selected.current())error.value=failure(cause)}
+  finally{if(current===generation)saving.value=false}
+}
 function reconcile(job:any){const current=generation,selected=source.value,server=props.serverId,jobId=job.id;if(!selected?.current()||loaded.value?.server!==server||loaded.value?.source!==JSON.stringify(selected.identity))return;dialog=q.dialog({title:t('power.reconcile'),message:t('power.reconcileHelp'),cancel:true,persistent:true}).onOk(async()=>{dialog=undefined;if(current!==generation||!selected.current())return;busy.value=true;try{await createServerPowerApi(selected).reconcile(server,jobId);if(current===generation&&selected.current())await refresh()}catch(cause){if(current===generation)error.value=failure(cause)}finally{if(current===generation)busy.value=false}})}
 </script>
 <template>
@@ -80,27 +89,26 @@ function reconcile(job:any){const current=generation,selected=source.value,serve
     <q-card-section v-if="error" class="q-pt-none"><q-banner rounded class="bg-red-1 text-negative" role="alert">{{error}}</q-banner></q-card-section>
     <q-card-section v-if="data" class="q-pt-none">
       <q-banner v-if="!desktopRuntime||!local.supported" rounded class="q-mb-md">{{t('power.desktopRequired')}}</q-banner>
-      <p v-if="!data.profile" class="text-grey-7">{{t('power.notConfigured')}}</p>
+      <p v-if="!data.configuration_current" class="text-grey-7">{{t('power.notConfigured')}}</p>
+      <q-btn v-if="!data.configuration_current&&data.can_configure" flat no-caps icon="key" :label="t('power.loadConfiguration')" class="q-mb-md" :disable="busy||saving" @click="showSettings=true"/>
       <div class="row q-gutter-sm items-center">
-        <q-btn unelevated no-caps color="primary" icon="power_settings_new" :label="t('power.start')" :disable="!local.supported||!data.profile||!data.can_edit||busy||blocked" @click="confirm('start')"/>
-        <q-btn outline no-caps color="negative" icon="power_settings_new" :label="t('power.stop')" :disable="!local.supported||!data.profile||!data.can_edit||busy||blocked" @click="confirm('shutdown')"/>
-        <q-btn flat no-caps icon="refresh" :label="t('power.inspect')" :disable="!local.supported||!data.profile||!data.can_edit||busy" @click="execute('inspect')"/>
+        <q-btn unelevated no-caps color="primary" icon="power_settings_new" :label="t('power.start')" :disable="!local.supported||!data.configuration_current||!data.can_edit||busy||saving||blocked" @click="confirm('start')"/>
+        <q-btn outline no-caps color="negative" icon="power_settings_new" :label="t('power.stop')" :disable="!local.supported||!data.configuration_current||!data.can_edit||busy||saving||blocked" @click="confirm('shutdown')"/>
+        <q-btn flat no-caps icon="refresh" :label="t('power.inspect')" :disable="!local.supported||!data.configuration_current||!data.can_edit||busy||saving" @click="execute('inspect')"/>
         <q-btn v-if="consoleHref" flat no-caps icon="open_in_new" :label="t('power.console')" :href="consoleHref" target="_blank" rel="noopener noreferrer"/>
       </div>
       <p v-if="busy" role="status" aria-live="polite" class="q-mt-md q-mb-none"><q-spinner class="q-mr-sm" color="primary"/>{{t('power.stage.'+stage)}}</p>
       <q-banner v-else-if="displayed" rounded class="q-mt-md" role="status"><strong>{{t('power.stage.'+displayed.stage)}}</strong><span class="q-ml-sm">{{date(displayed.updated)}}</span><p v-if="displayed.reason" class="q-mb-none q-mt-sm">{{t('power.error.'+displayed.reason)}}</p><q-btn v-if="displayed.status==='unknown'&&data.can_configure" flat no-caps class="q-mt-sm" :label="t('power.reconcile')" @click="reconcile(displayed)"/></q-banner>
-      <q-expansion-item v-if="desktopRuntime&&local.supported&&data.profile" dense :label="t('power.unlockOptions')" class="q-mt-md"><div class="q-pa-md"><q-input v-model="opAccount" outlined dense :disable="busy" :label="t('power.opAccount')" class="q-mb-md"/><q-input v-if="data.profile.boot_host_key" v-model="identity" outlined dense :disable="busy" :label="t('SSH identity file')"/><q-checkbox v-if="data.profile.boot_host_key&&local.proxy_available" v-model="viaHost" :disable="busy" :label="t('power.viaHost')"/></div></q-expansion-item>
+      <q-expansion-item v-if="desktopRuntime&&local.supported&&data.configuration_current" dense :label="t('power.unlockOptions')" class="q-mt-md"><div class="q-pa-md"><q-input v-if="data.profile.boot_host_key" v-model="identity" outlined dense :disable="busy" :label="t('SSH identity file')"/><q-checkbox v-if="data.profile.boot_host_key&&local.proxy_available" v-model="viaHost" :disable="busy" :label="t('power.viaHost')"/></div></q-expansion-item>
     </q-card-section>
     <q-card-section v-if="showSettings&&data?.can_configure" class="q-pt-none">
-      <q-form @submit="save" class="power-settings">
-        <q-input v-model="form.service_id" outlined dense :label="t('power.serviceId')" :disable="busy||blocked" :rules="[v=>/^[1-9][0-9]{0,15}$/.test(v)||t('power.required')]"/>
-        <q-input v-model="form.vm_id" outlined dense :label="t('power.vmId')" :disable="busy||blocked" :rules="[v=>/^[1-9][0-9]{0,15}$/.test(v)||t('power.required')]"/>
-        <p class="power-wide">{{t('power.bootHelp')}}</p>
-        <q-input v-model.number="form.boot_port" outlined dense type="number" min="1" max="65535" :label="t('power.bootPort')" :disable="busy||blocked"/>
-        <q-input v-model="form.luks_uuid" outlined dense :label="t('power.luksId')" :disable="busy||blocked"/>
-        <q-input v-model="form.boot_host_key" outlined dense type="textarea" autogrow :label="t('power.bootKey')" class="power-wide" :disable="busy||blocked"/>
-        <div class="row justify-end power-wide"><q-btn type="submit" unelevated color="primary" no-caps :label="t('Save')" :loading="saving" :disable="busy||blocked"/></div>
-      </q-form>
+      <div class="power-settings">
+        <div class="power-wide"><p>{{t('power.inventoryHelp')}}</p></div>
+        <div><strong>{{t('vault.serverItem')}}</strong><p>{{referenceLabel(data.credentials?.server)}}</p><q-btn flat no-caps :href="managementHash('servers','edit',serverId)" :label="t('vault.editServer')" :disable="busy||saving||blocked"/></div>
+        <div><strong>{{t('vault.workspaceItem')}}</strong><p>{{referenceLabel(data.credentials?.workspace)}}</p><q-btn flat no-caps :href="managementHash('workspaces','edit',data.workspace)" :label="t('vault.editWorkspace')" :disable="busy||saving||blocked"/></div>
+        <p class="power-wide">{{t('power.itemFieldsHelp')}}</p>
+        <div class="row justify-end power-wide"><q-btn unelevated color="primary" no-caps icon="sync" :label="t('power.loadConfiguration')" :loading="saving" :disable="!local.supported||!data.configuration||busy||blocked" @click="importConfiguration"/></div>
+      </div>
     </q-card-section>
     <q-inner-loading :showing="loading"><q-spinner color="primary"/></q-inner-loading>
   </q-card>

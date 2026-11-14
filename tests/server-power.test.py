@@ -197,5 +197,84 @@ class PowerTests(unittest.TestCase):
         self.assertEqual(error.exception.reason, 'disk_key_rejected')
 
 
+class VaultConfigurationTests(unittest.TestCase):
+    def setUp(self):
+        self.reference = {'provider': '1password', 'account': 'team.example.com', 'vault': 'Infrastructure', 'item': 'VPN server'}
+        self.request = {'action': 'configuration', 'target': {'address': '192.0.2.10', 'disk_credential': self.reference}}
+        self.item = {'fields': [{'label': 'SNEL service ID', 'value': '123'}, {'label': 'SNEL VM ID', 'value': '456'}, {'id': 'password', 'value': 'never-output-this'}, {'label': 'Disk Encryption Password', 'value': 'another-secret'}]}
+
+    def read(self):
+        with patch.object(power, 'op_item', return_value=self.item) as read:
+            result = power.configuration(self.request)
+        self.assertEqual(read.call_args.args[0], self.reference)
+        self.assertEqual(read.call_args.kwargs, {'metadata': True})
+        self.assertNotIn('secret', json.dumps(result))
+        self.assertNotIn('password', json.dumps(result))
+        return result
+
+    def test_configuration_comes_from_the_linked_account_vault_item(self):
+        result = self.read()
+        self.assertEqual(result, {'service_id': '123', 'vm_id': '456', 'boot_port': 2222, 'boot_host_key': '', 'luks_uuid': ''})
+
+    def test_existing_snel_service_url_supplies_its_identifier(self):
+        self.item['fields'].pop(0)
+        self.item['fields'].append({'type': 'URL', 'label': 'SNEL service URL', 'value': 'https://my.snel.com/clientarea/services/cloudvps/123/'})
+        self.assertEqual(self.read()['service_id'], '123')
+        self.item['fields'].append({'type': 'URL', 'label': 'Other URL', 'value': 'https://my.snel.com/clientarea/services/cloudvps/789/'})
+        with self.assertRaises(power.Failure) as error:
+            self.read()
+        self.assertEqual(error.exception.reason, 'vault_metadata_invalid')
+
+    def test_missing_or_conflicting_identifiers_never_select_a_vm(self):
+        self.item['fields'].append({'label': 'SNEL VM ID', 'value': '999'})
+        with self.assertRaises(power.Failure) as error:
+            self.read()
+        self.assertEqual(error.exception.reason, 'vault_metadata_invalid')
+        self.item['fields'] = []
+        with self.assertRaises(power.Failure) as error:
+            self.read()
+        self.assertEqual(error.exception.reason, 'vault_metadata_missing')
+
+    def test_wrong_server_and_incomplete_boot_identity_are_rejected(self):
+        self.item['fields'].append({'label': 'IP address', 'value': '192.0.2.11'})
+        with self.assertRaises(power.Failure) as error:
+            self.read()
+        self.assertEqual(error.exception.reason, 'vault_target_mismatch')
+        self.item['fields'].pop()
+        self.item['fields'].append({'label': 'LUKS disk UUID', 'value': UUID})
+        with self.assertRaises(power.Failure) as error:
+            self.read()
+        self.assertEqual(error.exception.reason, 'vault_metadata_invalid')
+
+    def test_cli_reads_the_saved_account_and_rejects_option_injection(self):
+        response = unittest.mock.Mock(returncode=0, stdout=b'{"fields":[]}')
+        with patch.object(power, 'executable', return_value='/fixture/op'), patch.object(power.subprocess, 'run', return_value=response) as run:
+            power.op_item(self.reference)
+            self.assertEqual(run.call_args.args[0], ['/fixture/op', 'item', 'get', 'VPN server', '--vault', 'Infrastructure', '--account', 'team.example.com', '--format', 'json'])
+            with self.assertRaises(power.Failure):
+                power.op_item({**self.reference, 'account': '--help'})
+            self.assertEqual(run.call_count, 1)
+
+    def test_metadata_cli_read_excludes_concealed_and_otp_fields(self):
+        response = unittest.mock.Mock(returncode=0, stdout=b'[{"label":"SNEL VM ID","type":"STRING","value":"456"}]')
+        with patch.object(power, 'executable', return_value='/fixture/op'), patch.object(power.subprocess, 'run', return_value=response) as run:
+            item = power.op_item(self.reference, metadata=True)
+        self.assertIn('type=STRING,type=URL', run.call_args.args[0])
+        self.assertNotIn('--reveal', run.call_args.args[0])
+        self.assertEqual(item['fields'][0]['value'], '456')
+
+    def test_provider_and_disk_accounts_are_independent_of_legacy_global_selection(self):
+        request = copy.deepcopy(REQUEST)
+        request['op_account'] = 'wrong-global-account'
+        request['target']['provider_credential']['account'] = 'provider-account'
+        request['target']['disk_credential']['account'] = 'server-account'
+        provider = Provider(None)
+        targets = []
+        with patch.object(power, 'op_item', return_value={'fields': [{'label': 'Disk Encryption Password', 'value': 'fixture'}]}) as read, contextlib.redirect_stdout(io.StringIO()):
+            power.run(request, lambda target: targets.append(target) or provider, lambda _: Boot(None))
+        self.assertEqual(targets[0]['provider_credential']['account'], 'provider-account')
+        self.assertEqual(read.call_args.args[0]['account'], 'server-account')
+
+
 if __name__ == '__main__':
     unittest.main()

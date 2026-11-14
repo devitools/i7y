@@ -14,18 +14,45 @@ It uses the signed desktop's current backend, organization and user session.
 ## Configuration
 
 Install the backend migration and hooks with the matching web and desktop release.
-An organization administrator maps each VPS to its numeric SNEL service and VM IDs
-in **Power and disk → Settings**. Verify those identifiers in the provider console;
-the provider API currently has no published response schema for individual VM data.
-The workspace must identify SNEL and link to its provider-account 1Password item.
-The server's inventory credential must link to the VM item with a field named
-`Disk Encryption Password`. Only these inventory references are used. Passwords
-are neither requested by the frontend nor stored in backend records or operation
-history.
+An administrator links **Secret manager → 1Password**, account, vault and item in
+**Edit server → Credential reference**. The workspace has an independent reference
+to its provider login item. Existing vault/item references remain compatible with
+the CLI's default account; set the account ID or sign-in address to select it
+explicitly. No global account selection overrides either reference. Only 1Password
+is supported. These fields store references, never passwords.
+
+In **Power and disk → 1Password configuration**, choose **Load from 1Password**.
+The desktop reads text and URL fields from the linked server item locally using
+`op item get --fields type=STRING,type=URL` and saves only validated VM and boot
+metadata. Keep configuration values in text/URL fields; concealed and OTP fields
+are not part of this read. The item supports these custom field labels (case insensitive):
+
+| 1Password field | Purpose |
+| --- | --- |
+| `SNEL service ID` / `service_id` | Numeric provider service identifier. A URL field such as `SNEL service URL` containing `https://my.snel.com/clientarea/services/cloudvps/<id>/` can supply this instead. |
+| `SNEL VM ID` / `vm_id` | Numeric VM identifier inside that service. |
+| `IP address` / `ip_address` | Optional check against the inventory server IP. A mismatch stops import. |
+| `Boot SSH port` / `boot_port` | Optional, default `2222`. |
+| `Verified boot SSH public key` / `boot_host_key` | Optional pinned boot endpoint identity; requires the LUKS UUID. |
+| `LUKS disk UUID` / `luks_uuid` | Optional encrypted disk identity; requires the boot public key. |
+| `Disk Encryption Password` | Read only during the existing unlock step, never returned by configuration import. |
+
+Missing, conflicting or invalid identifiers stop import. The script does not guess
+which VM belongs to a server. Provider passwords and MFA are read from the workspace
+item during an operator-requested operation. Other item fields and secrets are not
+returned to the frontend or stored in operation history.
+
+The import preserves the existing backend/user/organization/device-lock checks and
+requires administrator permission. A revision and a binding to the current inventory
+references prevent a delayed import from saving against a changed target. Changing
+the server IP, workspace or either credential reference requires loading the
+configuration again. Existing manual mappings are retained for history but must be
+loaded from 1Password before use in this release. After changing VM metadata in 1Password, load the configuration again. Running or unknown operations
+continue to block configuration changes.
 
 To unlock remotely, first prepare and validate a restricted SSH endpoint in the
-VM's initramfs. Configure the verified boot host public key, boot SSH port and exact
-LUKS UUID. The endpoint accepts only `status` and `unlock`: `status` lists active
+VM's initramfs. Record the verified boot host public key, boot SSH port and exact
+LUKS UUID in the linked 1Password item, then load the configuration. The endpoint accepts only `status` and `unlock`: `status` lists active
 systemd password requests, and `unlock` queries their passwords. It must expose the
 disk UUID in the authenticated password request. Grant the selected local SSH
 identity access to that endpoint. The operator may choose the configured automation
