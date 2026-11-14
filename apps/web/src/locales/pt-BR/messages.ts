@@ -89,6 +89,7 @@ export default {
     "Unknown": "Desconhecido",
     "Unhealthy": "Não saudável",
     "Starting": "Iniciando",
+    "Monitoring": "Monitoramento",
     "Inventory": "Inventário",
     "Your workspaces": "Seus workspaces",
     "Infrastructure": "Infraestrutura",

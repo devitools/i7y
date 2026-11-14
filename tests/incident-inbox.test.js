@@ -38,6 +38,34 @@ test('only a missing inbox falls back to authorized organizations and failed sou
   assert.equal(offline.calls.length,1)
   assert.deepEqual(result.failures.sort(),['denied','offline'])
 })
+test('organization filters scope backend queries and pagination before merging',async()=>{
+  for(const legacy of [false,true]) {
+    const ignored=source('other-backend',[row('wrong-source','9')])
+    const selected=source('selected',[],{legacy})
+    selected.organizations.push({id:'other-org',name:'Other organization',role:'editor'})
+    selected.send=async(path,query,organization)=>{
+      selected.calls.push({path,query,organization})
+      if(legacy && path.endsWith('/inbox'))throw {status:404}
+      assert.equal(query.connection,undefined)
+      assert.equal(query.organization,'same-org')
+      if(legacy)assert.equal(organization,'same-org')
+      const items=Array.from({length:3},(_,i)=>row('selected-'+i,String(9-i)))
+      return {items,totalItems:3,totalPages:1}
+    }
+    const inbox=createIncidentInbox()
+    const query={connection:'selected',organization:'same-org',perPage:2}
+    const page1=await inbox.list([ignored,selected],query)
+    const page2=await inbox.list([ignored,selected],{...query,page:2})
+    assert.deepEqual(page1.items.map(item=>item.id),['selected-0','selected-1'])
+    assert.deepEqual(page2.items.map(item=>item.id),['selected-2'])
+    assert.equal(page1.totalItems,3)
+    assert.equal(ignored.calls.length,0)
+    const denied=await inbox.list([ignored,selected],{connection:'selected',organization:'not-authorized'})
+    assert.equal(denied.totalItems,0)
+    assert.deepEqual(denied.items,[])
+    assert.equal(selected.calls.length,legacy?2:1)
+  }
+})
 test('composite incident routes preserve fixed connection and organization for identical IDs',()=>{
   const a={id:'incident',connection_id:'a',organization:'org'},b={...a,connection_id:'b'}
   assert.notEqual(incidentKey(a),incidentKey(b))

@@ -12,11 +12,19 @@ export async function desktopChallenge(verifier: string): Promise<string> {
   return Array.from(new Uint8Array(bytes),value=>value.toString(16).padStart(2,'0')).join('')
 }
 export async function browserSignIn(signal: AbortSignal, onRequest: (code: string)=>void, connectionId=activeConnectionId.value): Promise<void> {
+  const assertActive=()=>{if(signal.aborted)throw new DOMException('Aborted','AbortError')}
+  assertActive()
   await prepareConnectionLogin(connectionId)
+  assertActive()
   const api=desktopAuthApi.forConnection(connectionId)
   await api.available()
+  assertActive()
   const request=randomDesktopSecret(),verifier=randomDesktopSecret()
+  const challenge=await desktopChallenge(verifier)
+  assertActive()
   onRequest(request.slice(0,8).toUpperCase())
-  await invoke('open_browser_login',{connectionId,request,challenge:await desktopChallenge(verifier)})
+  assertActive()
+  await invoke('open_browser_login',{connectionId,request,challenge})
+  assertActive()
   await waitForDesktopAuthorization({signal,exchange:()=>api.exchange(request,verifier,signal)})
 }

@@ -1,6 +1,19 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { routeHash, readRoute } from '../apps/web/src/routes.ts'
+import { routeHash, readRoute, connectionsHash } from '../apps/web/src/routes.ts'
+
+test('backend management routes preserve source IDs and local return context',()=>{
+  const back='#/incidents/incident01?connection=source-a&organization=org-a'
+  for(const action of ['list','new','edit','remove']) {
+    const id=['edit','remove'].includes(action)?'source / one?two':null
+    const route=readRoute(connectionsHash(action,id,back))
+    assert.deepEqual(route,{view:'connections',action,...(id?{id}:{}),returnTo:back})
+    assert.equal(routeHash(route),connectionsHash(action,id,back))
+  }
+  for(const unsafe of ['https://example.com','#/login','#/desktop/connections?returnTo=recursive'])assert.equal(readRoute(connectionsHash('list',null,unsafe)).returnTo,null)
+  assert.equal(readRoute('#/desktop/connections/%E0%A4%A/edit').action,'list')
+  assert.throws(()=>connectionsHash('edit'),TypeError)
+})
 
 test('server ping has its own route and preserves a safe inventory return URL',()=>{
   const back='#/servers?workspace=team%40example.com&page=3&sortBy=name'

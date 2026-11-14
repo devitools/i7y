@@ -12,6 +12,12 @@ export function readRoute(hash: string): RouteState {
   if(parts[0]==='servers' && parts.length===4 && parts[2]==='actions' && parts[3]==='ping')return {view:'serverPing',server:decodeURIComponent(parts[1]),returnTo:inventoryReturn(params.get('returnTo'))}
   if(path==='desktop/mcp')return {view:'desktopMcp'}
   if(path==='desktop/controller')return {view:'controllerSettings'}
+  if(path==='desktop/connections')return {view:'connections',action:'list',returnTo:connectionsReturn(params.get('returnTo'))}
+  if(path==='desktop/connections/new')return {view:'connections',action:'new',returnTo:connectionsReturn(params.get('returnTo'))}
+  if(parts[0]==='desktop' && parts[1]==='connections' && parts.length===4 && ['edit','remove'].includes(parts[3])){
+    try{return {view:'connections',action:parts[3],id:decodeURIComponent(parts[2]),returnTo:connectionsReturn(params.get('returnTo'))}}
+    catch{return {view:'connections',action:'list',returnTo:null}}
+  }
   if(path==='alerts')return {view:'alerts',action:'list',section:'rules'}
   if(path==='alerts/new')return {view:'alerts',action:'new',section:'rules'}
   if(path==='alerts/integrations')return {view:'alerts',action:'list',section:'integrations'}
@@ -45,6 +51,7 @@ export function readRoute(hash: string): RouteState {
   return { view: path === 'images' && !params.get('image') ? 'imageCatalog' : views[path] || 'accounts', workspace: params.get('workspace'), server: params.get('server'), project: params.getAll('project').length>1?params.getAll('project'):params.get('project'), ...(params.has('image') ? { image: params.getAll('image').length>1 ? params.getAll('image') : params.get('image') } : {}), ...state }
 }
 export function routeHash({ view, workspace, server, project, image, statuses, ...state }: RouteState) {
+  if(view==='connections')return connectionsHash(state.action,state.id,state.returnTo)
   if(view==='alerts' || view==='incidents')return '#/'+view
   if(view==='organizations')return '#/organizations'
   const path = view === 'imageCatalog' ? 'images' : Object.keys(views).find(key => views[key] === view) || 'workspaces'
@@ -56,6 +63,18 @@ export function routeHash({ view, workspace, server, project, image, statuses, .
   for(const value of [...new Set(Array.isArray(image)?image:[image])]) if(value) params.append('image',value)
   for (const [key,value] of Object.entries(readListState(new URLSearchParams(Object.entries(state).filter(([,value])=>value!==null && value!==undefined && value!=='').map(([key,value])=>[key,String(value)]))))) params.set(key==='sortBy'?'order':key,String(value))
   return `#/${path}${params.size ? `?${params}` : ''}`
+}
+
+function connectionsReturn(hash: unknown) {
+  return typeof hash==='string' && /^#\/(?:workspaces|servers|projects|containers|images|telemetry|alerts|incidents|organizations|tokens|desktop\/(?:mcp|controller))(?:[/?]|$)/.test(hash) ? hash : null
+}
+
+export function connectionsHash(action='list',id:string|null=null,returnTo:string|null=null) {
+  if(!['list','new','edit','remove'].includes(action) || ['edit','remove'].includes(action) && !id)throw new TypeError('Invalid connection route')
+  const params=new URLSearchParams()
+  if(connectionsReturn(returnTo))params.set('returnTo',returnTo)
+  const path=action==='list'?'':action==='new'?'/new':'/'+encodeURIComponent(id)+'/'+action
+  return '#/desktop/connections'+path+(params.size?'?'+params:'')
 }
 
 export function managementHash(resource, action = 'new', id = null, parent = null, returnTo = null) {

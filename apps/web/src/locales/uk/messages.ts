@@ -89,6 +89,7 @@ export default {
     "Unknown": "Невідомо",
     "Unhealthy": "Несправний",
     "Starting": "Запуск",
+    "Monitoring": "Моніторинг",
     "Inventory": "Інвентар",
     "Your workspaces": "Ваші робочі простори",
     "Infrastructure": "Інфраструктура",

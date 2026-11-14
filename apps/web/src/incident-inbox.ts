@@ -37,7 +37,8 @@ export function createIncidentInbox() {
     try {return [await load()]}
     catch(error:any) {
       if(error.status!==404)throw error
-      const results=await Promise.allSettled(source.organizations.map(org=>load(org.id)))
+      const organizations=query.organization?source.organizations.filter(org=>org.id===query.organization):source.organizations
+      const results=await Promise.allSettled(organizations.map(org=>load(org.id)))
       const healthy:Stream[]=[]
       results.forEach(result=>{if(result.status==='fulfilled')healthy.push(result.value);else failures.push(source.id)})
       return healthy
@@ -53,7 +54,8 @@ export function createIncidentInbox() {
     } catch {if(version===revision){stream.failed=true;failures.push(stream.source.id)}}
   }
   async function list(sources:IncidentSource[],query:Record<string,unknown>={}) {
-    const {page=1,perPage=10,...filters}=query
+    const {page=1,perPage=10,connection,...filters}=query
+    sources=sources.filter(source=>(!connection || source.id===connection) && (!filters.organization || source.organizations.some(org=>org.id===filters.organization)))
     const nextKey=JSON.stringify([sourceFingerprint(sources),filters])
     if(key!==nextKey){reset();key=nextKey}
     const version=revision
