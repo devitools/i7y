@@ -47,13 +47,13 @@ are not part of this read. The item supports these custom field labels (case ins
 
 | 1Password field | Purpose |
 | --- | --- |
-| `SNEL service ID` / `service_id` | Numeric provider service identifier. A URL field such as `SNEL service URL` containing `https://my.snel.com/clientarea/services/cloudvps/<id>/` can supply this instead. |
-| `SNEL VM ID` / `vm_id` | Numeric VM identifier inside that service. |
-| `IP address` / `ip_address` | Optional check against the inventory server IP. A mismatch stops import. |
+| `SNEL service ID` / `service_id` | Numeric provider service identifier, stored as a text field. A URL field such as `SNEL service URL` containing `https://my.snel.com/clientarea/services/cloudvps/<id>/` can supply this instead. |
+| `SNEL VM ID` / `vm_id` | Numeric VM identifier inside that service, stored as a text field. |
+| `IP address` / `ip_address` / `IP` | Optional check against the inventory server IP. A mismatch stops import. |
 | `Boot SSH port` / `boot_port` | Optional, default `2222`. |
 | `Verified boot SSH public key` / `boot_host_key` | Optional pinned boot endpoint identity; requires the LUKS UUID. |
 | `LUKS disk UUID` / `luks_uuid` | Optional encrypted disk identity; requires the boot public key. |
-| `Disk Encryption Password` | Read only during the existing unlock step, never returned by configuration import. |
+| `Disk Encryption Password` | Read only during the existing unlock step, never returned by configuration import. Labels are case insensitive. |
 
 Missing, conflicting or invalid identifiers stop import. The script does not guess
 which VM belongs to a server. Provider passwords and MFA are read from the workspace

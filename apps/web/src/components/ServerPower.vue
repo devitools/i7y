@@ -10,7 +10,7 @@ import {t,locale} from '../i18n'
 import {managementHash} from '../routes'
 import {credentialReference,credentialManagerLabel} from '../vault-reference'
 const props=defineProps<{serverId:string}>()
-const q=useQuasar(),data=ref<any>(null),loaded=ref<{server:string;source:string}|null>(null),error=ref(''),busy=ref(false),saving=ref(false),loading=ref(false),stage=ref(''),request=ref('')
+const q=useQuasar(),data=ref<any>(null),loaded=ref<{server:string;source:string}|null>(null),error=ref(''),busy=ref(false),saving=ref(false),loading=ref(false),stage=ref(''),request=ref(''),configurationError=ref('')
 interface LocalSettings {supported:boolean;identity_file:string;proxy_available:boolean;context?:PowerNativeContext}
 const local=ref<LocalSettings>({supported:false,identity_file:'',proxy_available:false}),identity=ref(''),viaHost=ref(false),showSettings=ref(false)
 const currentHash=()=>window.location.hash
@@ -46,7 +46,7 @@ async function refresh(initial=false){
   finally{if(current===generation){loading.value=false;refreshing=false}}
 }
 watch(()=>[props.serverId,sourceIdentity.value],async()=>{
-  ++generation;dialog?.hide();dialog=undefined;data.value=null;loaded.value=null;error.value='';busy.value=false;saving.value=false;loading.value=false;stage.value='';request.value='';refreshing=false;showSettings.value=false;operationContext=undefined
+  ++generation;dialog?.hide();dialog=undefined;data.value=null;loaded.value=null;error.value='';configurationError.value='';busy.value=false;saving.value=false;loading.value=false;stage.value='';request.value='';refreshing=false;showSettings.value=false;operationContext=undefined
   local.value={supported:false,identity_file:'',proxy_available:false};identity.value='';viaHost.value=false
   if(timer)clearInterval(timer);if(unlisten){unlisten();unlisten=undefined}
   const current=generation,selected=source.value
@@ -82,11 +82,11 @@ function confirm(action:'start'|'shutdown'){
 async function importConfiguration(){
   const current=generation,selected=source.value,server=props.serverId,context=local.value.context
   if(!desktopRuntime||!context||!data.value?.can_configure||!selected?.current()||loaded.value?.server!==server||loaded.value?.source!==JSON.stringify(selected.identity)||busy.value||blocked.value||saving.value)return
-  saving.value=true;error.value=''
+  saving.value=true;error.value='';configurationError.value=''
   try{
     await invoke('server_power_import_configuration',{serverId:server,expectedContext:JSON.parse(JSON.stringify(context))})
     if(current===generation&&selected.current()&&await refresh(true)&&current===generation&&selected.current()){showSettings.value=false;q.notify({type:'positive',message:t('power.configurationLoaded')})}
-  }catch(cause){if(current===generation&&selected.current())error.value=failure(cause)}
+  }catch(cause){if(current===generation&&selected.current())configurationError.value=failure(cause)}
   finally{if(current===generation)saving.value=false}
 }
 function reconcile(job:any){const current=generation,selected=source.value,server=props.serverId,jobId=job.id;if(!selected?.current()||loaded.value?.server!==server||loaded.value?.source!==JSON.stringify(selected.identity))return;dialog=q.dialog({title:t('power.reconcile'),message:t('power.reconcileHelp'),cancel:true,persistent:true}).onOk(async()=>{dialog=undefined;if(current!==generation||!selected.current())return;busy.value=true;try{await createServerPowerApi(selected).reconcile(server,jobId);if(current===generation&&selected.current())await refresh()}catch(cause){if(current===generation)error.value=failure(cause)}finally{if(current===generation)busy.value=false}})}
@@ -94,11 +94,11 @@ function reconcile(job:any){const current=generation,selected=source.value,serve
 <template>
   <q-card v-if="!data||data.provider_supported" flat bordered class="server-power q-mb-md">
     <q-card-section class="power-heading"><div><h2>{{t('power.title')}}</h2><p>{{t('power.help')}}</p></div><q-btn v-if="data?.can_configure" flat round dense icon="settings" :aria-label="t('power.settings')" :aria-expanded="showSettings" @click="showSettings=!showSettings"/></q-card-section>
-    <q-card-section v-if="error" class="q-pt-none"><q-banner rounded class="bg-red-1 text-negative" role="alert">{{error}}</q-banner></q-card-section>
+    <q-card-section v-if="error||configurationError" class="q-pt-none"><q-banner rounded class="bg-red-1 text-negative" role="alert">{{error||configurationError}}</q-banner></q-card-section>
     <q-card-section v-if="data" class="q-pt-none">
       <q-banner v-if="!desktopRuntime||!local.supported" rounded class="q-mb-md">{{t('power.desktopRequired')}}</q-banner>
       <p v-if="!data.configuration_current" class="text-grey-7">{{t('power.notConfigured')}}</p>
-      <q-btn v-if="!data.configuration_current&&data.can_configure" flat no-caps icon="key" :label="t('power.loadConfiguration')" class="q-mb-md" :disable="busy||saving" @click="showSettings=true"/>
+      <q-btn v-if="!data.configuration_current&&data.can_configure&&!showSettings" flat no-caps icon="key" :label="t('power.loadConfiguration')" class="q-mb-md" :loading="saving" :disable="busy||blocked" @click="data.configuration?importConfiguration():showSettings=true"/>
       <div class="row q-gutter-sm items-center">
         <q-btn unelevated no-caps color="primary" icon="power_settings_new" :label="t('power.start')" :disable="!local.supported||!data.configuration_current||!data.can_edit||busy||saving||blocked" @click="confirm('start')"/>
         <q-btn outline no-caps color="negative" icon="power_settings_new" :label="t('power.stop')" :disable="!local.supported||!data.configuration_current||!data.can_edit||busy||saving||blocked" @click="confirm('shutdown')"/>

@@ -45,7 +45,7 @@ function componentHarness(){
   let confirmation,valid=true
   const native={connectionId:'a',connectionGeneration:1,lockEpoch:1,context:{backend:'https://a.test/',user:'same-user',organization:'same-org',generation:2}}
   const selected={identity:{organization:'same-org'},current:()=>valid}
-  const calls=[],context={desktopRuntime:true,source:{value:selected},loaded:{value:{server:'same-server',source:JSON.stringify(selected.identity)}},local:{value:{context:native}},data:{value:{profile:{version:7},configuration_current:true,can_edit:true,can_configure:true,name:'A server',address:'1.2.3.4'}},props:{serverId:'same-server'},identity:{value:'/a-key'},viaHost:{value:true},opAccount:{value:'account-a'},generation:1,busy:{value:false},saving:{value:false},blocked:{value:false},error:{value:''},stage:{value:''},request:{value:''},crypto:{randomUUID:()=> 'request'},localStorage:{setItem:()=>{}},t:key=>key,showSettings:{value:true},q:{notify:()=>{},dialog:()=>({hide(){},onOk(callback){confirmation=callback;return this}})},invoke:async(command,args)=>{calls.push({command,args})},refresh:async()=>{},failure:()=> 'failed'}
+  const calls=[],context={desktopRuntime:true,source:{value:selected},loaded:{value:{server:'same-server',source:JSON.stringify(selected.identity)}},local:{value:{context:native}},data:{value:{profile:{version:7},configuration_current:true,can_edit:true,can_configure:true,name:'A server',address:'1.2.3.4'}},props:{serverId:'same-server'},identity:{value:'/a-key'},viaHost:{value:true},opAccount:{value:'account-a'},generation:1,busy:{value:false},saving:{value:false},blocked:{value:false},error:{value:''},configurationError:{value:''},stage:{value:''},request:{value:''},crypto:{randomUUID:()=> 'request'},localStorage:{setItem:()=>{}},t:key=>key,showSettings:{value:true},q:{notify:()=>{},dialog:()=>({hide(){},onOk(callback){confirmation=callback;return this}})},invoke:async(command,args)=>{calls.push({command,args})},refresh:async()=>{},failure:()=> 'failed'}
   vm.createContext(context);vm.runInContext(ts.transpileModule(functions,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context)
   return {context,calls,hasConfirmation:()=>!!confirmation,confirm:()=>confirmation(),invalidate:()=>valid=false}
 }
@@ -91,4 +91,22 @@ test('vault import rechecks its origin after refreshing the saved profile',async
   await h.context.importConfiguration()
   assert.equal(notifications.length,0)
   assert.equal(h.context.showSettings.value,true)
+})
+
+test('credential import errors remain separate from polling and clear when the user retries',async()=>{
+  const h=componentHarness()
+  h.context.invoke=async()=>{throw new Error('vault_metadata_missing')}
+  await h.context.importConfiguration()
+  assert.equal(h.context.configurationError.value,'failed')
+  assert.equal(h.context.error.value,'')
+  assert.equal(h.context.saving.value,false)
+  h.context.invoke=async()=>{}
+  h.context.refresh=async()=>true
+  await h.context.importConfiguration()
+  assert.equal(h.context.configurationError.value,'')
+  assert.equal(h.context.showSettings.value,false)
+  const stale=componentHarness()
+  stale.context.invoke=async()=>{stale.invalidate();throw new Error('vault_metadata_missing')}
+  await stale.context.importConfiguration()
+  assert.equal(stale.context.configurationError.value,'')
 })
