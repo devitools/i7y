@@ -3,6 +3,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+import time
 
 
 class Failure(Exception):
@@ -59,13 +60,71 @@ class OnePassword:
             raise Failure('invalid_target')
         self.reference = reference
 
+    def account_id(self):
+        selector = self.reference.get('account', '')
+        if not selector:
+            return ''
+        cli = executable('op')
+        deadline = time.monotonic() + 45
+
+        def query(arguments):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise Failure('vault_unavailable')
+            try:
+                result = subprocess.run([cli, 'account', *arguments, '--format', 'json'], capture_output=True, timeout=min(15, remaining), check=False)
+                if result.returncode or len(result.stdout) > 1048576:
+                    raise Failure('vault_unavailable')
+                return json.loads(result.stdout)
+            except (OSError, subprocess.TimeoutExpired, UnicodeError, ValueError):
+                raise Failure('vault_unavailable') from None
+
+        accounts = query(['list'])
+        if not isinstance(accounts, list) or not accounts or len(accounts) > 32:
+            raise Failure('vault_unavailable')
+        known, direct = {}, set()
+        wanted = selector.casefold().rstrip('/')
+        for account in accounts:
+            if not isinstance(account, dict):
+                raise Failure('vault_unavailable')
+            identifier = account.get('account_uuid')
+            if not isinstance(identifier, str) or not re.fullmatch(r'[A-Za-z0-9]{26}', identifier):
+                raise Failure('vault_unavailable')
+            known[identifier] = account
+            selectors = [identifier, account.get('user_uuid'), account.get('shorthand')]
+            url = account.get('url')
+            if isinstance(url, str) and url:
+                selectors += [url, 'https://' + url if '://' not in url else url]
+            if any(isinstance(value, str) and value.casefold().rstrip('/') == wanted for value in selectors):
+                direct.add(identifier)
+        if direct:
+            if len(direct) != 1:
+                raise Failure('vault_unavailable')
+            return next(iter(direct))
+        matching = set()
+        for identifier in known:
+            details = query(['get', '--account', identifier])
+            if not isinstance(details, dict) or details.get('id') != identifier or not isinstance(details.get('name'), str):
+                raise Failure('vault_unavailable')
+            if details['name'].strip().casefold() == selector.casefold():
+                matching.add(identifier)
+        if len(matching) == 1:
+            return next(iter(matching))
+        if matching:
+            raise Failure('vault_unavailable')
+        details = query(['get', '--account', selector])
+        if not isinstance(details, dict) or details.get('id') not in known:
+            raise Failure('vault_unavailable')
+        return details['id']
+
     def item(self, otp=False, metadata=False):
         reference = self.reference
         args = [executable('op'), 'item', 'get', reference['item']]
         if reference.get('options', {}).get('vault'):
             args += ['--vault', reference['options']['vault']]
-        if reference.get('account'):
-            args += ['--account', reference['account']]
+        account = self.account_id()
+        if account:
+            args += ['--account', account]
         if metadata:
             args += ['--fields', 'type=STRING,type=URL']
         args += ['--otp'] if otp else ['--format', 'json']

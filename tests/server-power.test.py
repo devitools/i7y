@@ -5,6 +5,7 @@ import http.client
 import io
 import json
 import pathlib
+import subprocess
 import sys
 import unittest
 from unittest.mock import patch
@@ -248,7 +249,7 @@ class VaultConfigurationTests(unittest.TestCase):
 
     def test_cli_reads_the_saved_account_and_rejects_option_injection(self):
         response = unittest.mock.Mock(returncode=0, stdout=b'{"fields":[]}')
-        with patch.object(power.vaults, 'executable', return_value='/fixture/op'), patch.object(power.subprocess, 'run', return_value=response) as run:
+        with patch.object(power.vaults, 'executable', return_value='/fixture/op'), patch.object(power.vaults.OnePassword, 'account_id', return_value='team.example.com'), patch.object(power.subprocess, 'run', return_value=response) as run:
             power.vault_item(self.reference)
             self.assertEqual(run.call_args.args[0], ['/fixture/op', 'item', 'get', 'VPN server', '--vault', 'Infrastructure', '--account', 'team.example.com', '--format', 'json'])
             with self.assertRaises(power.Failure):
@@ -257,7 +258,7 @@ class VaultConfigurationTests(unittest.TestCase):
 
     def test_metadata_cli_read_excludes_concealed_and_otp_fields(self):
         response = unittest.mock.Mock(returncode=0, stdout=b'[{"label":"SNEL VM ID","type":"STRING","value":"456"}]')
-        with patch.object(power.vaults, 'executable', return_value='/fixture/op'), patch.object(power.subprocess, 'run', return_value=response) as run:
+        with patch.object(power.vaults, 'executable', return_value='/fixture/op'), patch.object(power.vaults.OnePassword, 'account_id', return_value='team.example.com'), patch.object(power.subprocess, 'run', return_value=response) as run:
             item = power.vault_item(self.reference, metadata=True)
         self.assertIn('type=STRING,type=URL', run.call_args.args[0])
         self.assertNotIn('--reveal', run.call_args.args[0])
@@ -313,12 +314,92 @@ class GenericVaultTests(unittest.TestCase):
     def test_manager_name_is_never_forwarded_as_the_onepassword_vault_name(self):
         reference = {'version': 2, 'vault': '1password', 'account': 'Disk Ninja', 'item': 'SNEL VPN VPS Server'}
         response = unittest.mock.Mock(returncode=0, stdout=b'{"fields":[]}')
-        with patch.object(power.vaults, 'executable', return_value='/fixture/op'), patch.object(power.vaults.subprocess, 'run', return_value=response) as run:
+        with patch.object(power.vaults, 'executable', return_value='/fixture/op'), patch.object(power.vaults.OnePassword, 'account_id', return_value='Disk Ninja'), patch.object(power.vaults.subprocess, 'run', return_value=response) as run:
             power.vault_item(reference)
             self.assertEqual(run.call_args.args[0], ['/fixture/op', 'item', 'get', 'SNEL VPN VPS Server', '--account', 'Disk Ninja', '--format', 'json'])
             power.vault_item({**reference, 'options': {'vault': 'Real vault'}})
             self.assertIn('Real vault', run.call_args.args[0])
             self.assertNotIn('1password', run.call_args.args[0])
+
+class OnePasswordAccountTests(unittest.TestCase):
+    primary = 'A' * 26
+    personal = 'B' * 26
+
+    def setUp(self):
+        self.calls = []
+        self.accounts = [{'account_uuid': self.primary, 'url': 'fixture.1password.com', 'user_uuid': 'C' * 26}, {'account_uuid': self.personal, 'url': 'my.1password.com', 'user_uuid': 'D' * 26}]
+        self.details = {self.primary: {'id': self.primary, 'name': 'Disk Ninja'}, self.personal: {'id': self.personal, 'name': 'Personal'}}
+        self.reference = {'version': 2, 'vault': '1password', 'account': 'Disk Ninja', 'item': 'Fixture VM', 'options': {'vault': 'Infrastructure'}}
+
+    def cli(self, args, **options):
+        self.calls.append(args)
+        if args[1:3] == ['account', 'list']:
+            data = self.accounts
+        elif args[1:3] == ['account', 'get']:
+            data = self.details.get(args[args.index('--account') + 1])
+            if isinstance(data, Exception):
+                raise data
+            if data is None:
+                return unittest.mock.Mock(returncode=1, stdout=b'', stderr=b'Account unavailable')
+        else:
+            self.assertEqual(args[1:3], ['item', 'get'])
+            data = [{'label': 'SNEL VM ID', 'type': 'STRING', 'value': '456'}]
+        return unittest.mock.Mock(returncode=0, stdout=json.dumps(data).encode(), stderr=b'')
+
+    def read(self, reference=None):
+        with patch.object(power.vaults, 'executable', return_value='/fixture/op'), patch.object(power.vaults.subprocess, 'run', side_effect=self.cli):
+            return power.vault_item(reference or self.reference, metadata=True)
+
+    def test_verified_friendly_name_resolves_to_uuid_before_item_read(self):
+        self.read()
+        self.assertEqual([args[1:3] for args in self.calls], [['account', 'list'], ['account', 'get'], ['account', 'get'], ['item', 'get']])
+        item = self.calls[-1]
+        self.assertEqual(item[item.index('--account') + 1], self.primary)
+        self.assertEqual(item[item.index('--vault') + 1], 'Infrastructure')
+        self.assertNotIn('Disk Ninja', item)
+        self.assertIn('type=STRING,type=URL', item)
+        self.assertEqual(self.reference['account'], 'Disk Ninja')
+
+    def test_known_url_uuid_and_user_id_select_the_same_account_without_name_lookup(self):
+        for selector in ['fixture.1password.com', 'https://fixture.1password.com/', self.primary, 'C' * 26]:
+            self.calls = []
+            self.read({**self.reference, 'account': selector})
+            self.assertEqual([args[1:3] for args in self.calls], [['account', 'list'], ['item', 'get']])
+            self.assertEqual(self.calls[-1][self.calls[-1].index('--account') + 1], self.primary)
+
+    def test_ambiguous_missing_and_unverified_names_never_read_items(self):
+        for mode in ['ambiguous', 'missing', 'unverified', 'wrong-id']:
+            with self.subTest(mode=mode):
+                self.calls = []
+                self.details[self.personal] = {'id': self.personal, 'name': 'Personal'}
+                reference = self.reference
+                if mode == 'ambiguous':
+                    self.details[self.personal]['name'] = 'Disk Ninja'
+                elif mode == 'missing':
+                    reference = {**reference, 'account': 'Missing team'}
+                elif mode == 'unverified':
+                    self.details[self.personal] = subprocess.TimeoutExpired('fixture', 15)
+                else:
+                    self.details[self.personal]['id'] = self.primary
+                with self.assertRaises(power.Failure) as error:
+                    self.read(reference)
+                self.assertEqual(error.exception.reason, 'vault_unavailable')
+                self.assertFalse(any(args[1:3] == ['item', 'get'] for args in self.calls))
+
+    def test_verified_cli_shorthand_is_supported_without_guessing_the_host(self):
+        self.details['fixture-shortname'] = {'id': self.primary, 'name': 'Disk Ninja'}
+        self.read({**self.reference, 'account': 'fixture-shortname'})
+        self.assertEqual(self.calls[-1][self.calls[-1].index('--account') + 1], self.primary)
+        self.calls = []
+        with self.assertRaises(power.Failure):
+            self.read({**self.reference, 'account': 'DiskNinja'})
+        self.assertFalse(any(args[1:3] == ['item', 'get'] for args in self.calls))
+
+    def test_legacy_default_account_does_not_trigger_a_metadata_lookup(self):
+        self.read({**self.reference, 'account': ''})
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.calls[0][1:3], ['item', 'get'])
+        self.assertNotIn('--account', self.calls[0])
 
 if __name__ == '__main__':
     unittest.main()
