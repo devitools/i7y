@@ -9,7 +9,7 @@ test('all interface messages exist in every language and use workspace terminolo
   for (const language of ['en', 'pt-BR', 'uk']) {
     for (const key of keys) assert.ok(messages[language][key], `${language}: ${key}`)
     for (const [key,value] of Object.entries(messages[language])) {
-      if(!key.startsWith('vault.')&&key!=='power.inventoryHelp')assert.doesNotMatch(value, /\baccounts?\b/i)
+      if(!key.startsWith('vault.')&&!key.startsWith('power.error.vault_')&&key!=='power.inventoryHelp')assert.doesNotMatch(value, /\baccounts?\b/i)
     }
   }
   assert.doesNotMatch(source, /class="sidebar-footer"/)

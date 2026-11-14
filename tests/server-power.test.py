@@ -391,7 +391,7 @@ class OnePasswordAccountTests(unittest.TestCase):
                     self.details[self.personal]['id'] = self.primary
                 with self.assertRaises(power.Failure) as error:
                     self.read(reference)
-                self.assertEqual(error.exception.reason, 'vault_unavailable')
+                self.assertEqual(error.exception.reason, {'ambiguous': 'vault_account_ambiguous', 'missing': 'vault_accounts_unavailable', 'unverified': 'vault_timeout', 'wrong-id': 'vault_response_invalid'}[mode])
                 self.assertFalse(any(args[1:3] == ['item', 'get'] for args in self.calls))
 
     def test_verified_cli_shorthand_is_supported_without_guessing_the_host(self):
@@ -410,8 +410,37 @@ class OnePasswordAccountTests(unittest.TestCase):
                 self.calls = []
                 with self.assertRaises(power.Failure) as error:
                     self.read({**self.reference, 'account': selector})
-                self.assertEqual(error.exception.reason, 'vault_unavailable')
+                self.assertEqual(error.exception.reason, 'vault_account_ambiguous')
                 self.assertFalse(any(args[1:3] == ['item', 'get'] for args in self.calls))
+
+    def test_unavailable_app_never_attempts_an_item_read(self):
+        self.accounts = []
+        with self.assertRaises(power.Failure) as error:
+            self.read()
+        self.assertEqual(error.exception.reason, 'vault_app_unavailable')
+        self.assertEqual([call[1:3] for call in self.calls], [['account', 'list']])
+
+    def test_import_errors_identify_the_failed_step_without_exposing_cli_output(self):
+        for phase, expected in [('accounts', 'vault_accounts_unavailable'), ('item', 'vault_item_unavailable')]:
+            for detail, reason in [(b'fixture-secret', expected), (b'Authorization denied fixture-secret', 'vault_access_denied'), (b'No accounts configured for use with 1Password CLI fixture-secret', 'vault_app_unavailable'), (b'operation not permitted fixture-secret', 'vault_app_unavailable')]:
+                with self.subTest(phase=phase, detail=detail):
+                    def failed(args, **options):
+                        if args[1:3] == ['account', 'list'] and phase == 'item':
+                            return unittest.mock.Mock(returncode=0, stdout=json.dumps(self.accounts).encode())
+                        return unittest.mock.Mock(returncode=1, stdout=b'fixture-secret', stderr=detail)
+                    reference = {**self.reference, 'account': 'fixture.1password.com'}
+                    with patch.object(power.vaults, 'executable', return_value='/fixture/op'), patch.object(power.vaults.subprocess, 'run', side_effect=failed):
+                        with self.assertRaises(power.Failure) as error:
+                            power.vault_item(reference, metadata=True)
+                    self.assertEqual(error.exception.reason, reason)
+                    self.assertNotIn('fixture-secret', str(error.exception))
+
+    def test_power_operations_preserve_the_existing_failure_contract(self):
+        response = unittest.mock.Mock(returncode=1, stdout=b'', stderr=b'Authorization denied')
+        with patch.object(power.vaults, 'executable', return_value='/fixture/op'), patch.object(power.vaults.subprocess, 'run', return_value=response):
+            with self.assertRaises(power.Failure) as error:
+                power.vault_item(self.reference)
+        self.assertEqual(error.exception.reason, 'vault_unavailable')
 
     def test_legacy_default_account_does_not_trigger_a_metadata_lookup(self):
         self.read({**self.reference, 'account': ''})

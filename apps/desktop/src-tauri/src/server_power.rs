@@ -185,7 +185,7 @@ fn configuration_message(bytes: &[u8]) -> Result<VaultConfiguration, String> {
     let value: Value = serde_json::from_slice(bytes).map_err(|_| "vault_metadata_invalid")?;
     if value["kind"] == "result" {
         let reason = value["reason"].as_str().unwrap_or("");
-        return Err(if ["vault_unavailable","vault_unsupported","vault_metadata_missing","vault_metadata_invalid","vault_target_mismatch","runtime_unavailable","invalid_target"].contains(&reason) {reason} else {"vault_metadata_invalid"}.into());
+        return Err(if ["vault_accounts_unavailable","vault_account_ambiguous","vault_item_unavailable","vault_item_ambiguous","vault_access_denied","vault_app_unavailable","vault_timeout","vault_response_invalid","vault_unavailable","vault_unsupported","vault_metadata_missing","vault_metadata_invalid","vault_target_mismatch","runtime_unavailable","invalid_target"].contains(&reason) {reason} else {"vault_metadata_invalid"}.into());
     }
     if value["kind"] != "configuration" || value.as_object().map_or(true,|object|object.len()!=2) {return Err("vault_metadata_invalid".into())}
     let profile: VaultConfiguration = serde_json::from_value(value["profile"].clone()).map_err(|_| "vault_metadata_invalid")?;
@@ -313,6 +313,12 @@ mod tests {
         }
         let error=configuration_message(br#"{"kind":"result","status":"failed","stage":"failed","reason":"vault_metadata_missing"}"#).err().unwrap();
         assert_eq!(error,"vault_metadata_missing");
+        for reason in ["vault_accounts_unavailable","vault_account_ambiguous","vault_item_unavailable","vault_item_ambiguous","vault_access_denied","vault_app_unavailable","vault_timeout","vault_response_invalid"] {
+            let value=json!({"kind":"result","status":"failed","stage":"failed","reason":reason});
+            assert_eq!(configuration_message(&serde_json::to_vec(&value).unwrap()).err().unwrap(),reason);
+        }
+        let value=json!({"kind":"result","status":"failed","stage":"failed","reason":"CLI output with a secret"});
+        assert_eq!(configuration_message(&serde_json::to_vec(&value).unwrap()).err().unwrap(),"vault_metadata_invalid");
     }
     fn prepared() -> (crate::connections::Registry, crate::mcp::Inner, ExpectedSource) {
         let backend = crate::backend::normalize_backend("https://a.test/").unwrap();
