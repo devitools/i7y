@@ -205,6 +205,18 @@ def main(runtime):
     snapshot.update(sample_id=secrets.token_hex(16), observed_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
     call('/api/i7y/telemetry/v1/snapshots', 'POST', snapshot, agent)
     assert call(path, token=reader, org=org)['jobs'][0]['status'] == 'recovered'
+    console_job = call(path + '/jobs', 'POST', {**body, 'request_id': str(uuid.uuid4())}, editor, org, 201)
+    call(path + '/jobs/' + console_job['id'] + '/finish', 'POST', {'status': 'requires_console', 'stage': 'requires_console', 'reason': 'boot_unavailable'}, editor, org)
+    assert call(path, token=reader, org=org)['jobs'][0]['status'] == 'requires_console'
+    for _ in range(11):
+        inspection = call(path + '/jobs', 'POST', {**body, 'request_id': str(uuid.uuid4()), 'action': 'inspect'}, owner, org, 201)
+        call(path + '/jobs/' + inspection['id'] + '/finish', 'POST', {'status': 'observed', 'stage': 'provider_on'}, owner, org)
+    assert any(job['id'] == console_job['id'] and job['status'] == 'requires_console' for job in call(path, token=reader, org=org)['jobs'])
+    time.sleep(0.03)
+    snapshot.update(sample_id=secrets.token_hex(16), observed_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
+    call('/api/i7y/telemetry/v1/snapshots', 'POST', snapshot, agent)
+    console_result = next(job for job in call(path, token=reader, org=org)['jobs'] if job['id'] == console_job['id'])
+    assert console_result['status'] == 'recovered' and console_result['reason'] == ''
     assert call('/api/collections/servers/records/' + server, token=owner, org=org)['inventory_known'] is False
     snapshot.update(sample_id=secrets.token_hex(16), observed_at=datetime.datetime.now(datetime.timezone.utc).isoformat(), docker_complete=True, collection_mode='docker')
     call('/api/i7y/telemetry/v1/snapshots', 'POST', snapshot, agent)

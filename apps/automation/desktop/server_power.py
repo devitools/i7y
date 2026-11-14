@@ -332,6 +332,7 @@ def run(request, provider_factory=Provider, boot_factory=Boot, sleep=time.sleep,
                 return {'status': 'unknown', 'stage': 'unknown', 'reason': 'provider_unavailable'}
         except Exception:
             return {'status': 'unknown', 'stage': 'unknown', 'reason': 'provider_unavailable'}
+    emit(kind='progress', stage='checking_boot')
     if not target.get('boot_host_key') or not target.get('luks_uuid'):
         return {'status': 'requires_console', 'stage': 'requires_console', 'reason': 'boot_unavailable'}
     emit(kind='progress', stage='waiting_for_boot')

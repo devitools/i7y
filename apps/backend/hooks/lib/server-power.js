@@ -33,7 +33,7 @@ function dto(record){const out={id:record.id};for(const key of ['user','request_
 function contact(app,server){const latest=rows(app,'telemetry_samples','server={:server}',{server},'-observed_at',1)[0];return latest?Math.min(date(latest.getString('observed_at')),date(latest.getString('received_at')),Date.now()):0}
 function refresh(app,job){
   if(job.getString('status')==='running'&&Date.now()-date(job.getString('started_at'))>600000){job.set('status','unknown');job.set('stage','unknown');job.set('reason','operation_interrupted');app.save(job)}
-  if(job.getString('action')==='start'&&['awaiting_agent','unknown'].includes(job.getString('status'))&&contact(app,job.getString('server'))>date(job.getString('started_at'))){job.set('status','recovered');job.set('stage','agent_connected');job.set('finished_at',new Date().toISOString());app.save(job)}
+  if(job.getString('action')==='start'&&['awaiting_agent','requires_console','unknown'].includes(job.getString('status'))&&contact(app,job.getString('server'))>date(job.getString('started_at'))){job.set('status','recovered');job.set('stage','agent_connected');job.set('reason','');job.set('finished_at',new Date().toISOString());app.save(job)}
 }
 function handle(e,operation){let result;e.app.runInTransaction(app=>{
   const c=context(e,app,operation!=='get',operation==='save'||operation==='reconcile'),body=e.requestInfo().body||{},p=profile(app,c)
@@ -42,6 +42,8 @@ function handle(e,operation){let result;e.app.runInTransaction(app=>{
     const key=p?providerKey({service_id:p.getString('service_id'),vm_id:p.getString('vm_id')}):''
     const active=rows(app,'server_power_jobs','(server={:server} || provider_key={:key}) && organization={:org} && (status="running" || status="unknown")',{server:c.server.id,key,org:c.org},'',1)[0]
     if(active&&!jobs.some(job=>job.id===active.id))jobs.push(active)
+    const lastAction=rows(app,'server_power_jobs','server={:server} && organization={:org} && action!="inspect"',{server:c.server.id,org:c.org},'-created',1)[0]
+    if(lastAction&&!jobs.some(job=>job.id===lastAction.id))jobs.push(lastAction)
     for(const job of jobs)refresh(app,job)
     let configured=null;try{configured=configuration(c)}catch(_){}
     const references={};for(const [key,record]of [['server',c.server],['workspace',c.workspace]]){try{references[key]=credential(record)}catch(_){references[key]=null}}

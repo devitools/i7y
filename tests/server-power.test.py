@@ -85,6 +85,28 @@ class PowerTests(unittest.TestCase):
         self.run_action()
         self.assertEqual(self.provider.changes, [])
 
+    def test_already_powered_on_checks_the_prompt_before_reading_or_sending_the_disk_password(self):
+        self.provider.power = True
+        steps = []
+        self.provider.state = lambda: steps.append('power-state') or True
+        self.boot.status = lambda: steps.append('disk-prompt') or True
+        self.read_vault.side_effect = lambda *args, **kwargs: steps.append('vault-read') or {'fields': [{'label': 'Disk Encryption Password', 'value': self.secret}]}
+        self.boot.unlock = lambda secret: steps.append('unlock')
+        result = self.run_action()
+        self.assertEqual(self.provider.changes, [])
+        self.assertEqual(steps, ['power-state', 'disk-prompt', 'disk-prompt', 'vault-read', 'unlock'])
+        self.assertEqual(result, {'status': 'awaiting_agent', 'stage': 'awaiting_agent'})
+
+    def test_already_powered_on_without_remote_unlock_keeps_console_pending(self):
+        self.provider.power = True
+        request = copy.deepcopy(REQUEST)
+        request['target']['boot_host_key'] = ''
+        request['target']['luks_uuid'] = ''
+        result = self.run_action(request=request)
+        self.assertEqual(result['status'], 'requires_console')
+        self.assertEqual(self.provider.changes, [])
+        self.read_vault.assert_not_called()
+
     def test_missing_boot_configuration_requests_console_without_reading_disk_secret(self):
         request = copy.deepcopy(REQUEST)
         request['target']['boot_host_key'] = ''
