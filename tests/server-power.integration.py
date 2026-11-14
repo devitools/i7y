@@ -149,6 +149,16 @@ def main(runtime):
     call(path, token=outsider, org=org, expected=403)
     call(path, token=reader, org=other_org, expected=403)
     call(path, token=reader, org=org)
+    human = {'workspace': workspace['id'], 'name': 'manual.example.test', 'ip': '192.0.2.15', 'type': 'VPS'}
+    created = call('/api/collections/servers/records', 'POST', human, owner, org)
+    assert created['status'] == '' and created['inventory_known'] is False and created['sort_order'] == 0
+    for field, value in [('status', 'ACTIVE'), ('inventory_known', True), ('sort_order', 3)]:
+        call('/api/collections/servers/records', 'POST', {**human, field: value}, owner, org, 403)
+        call('/api/collections/servers/records/' + server, 'PATCH', {field: value}, owner, org, 403)
+    call('/api/collections/servers/records/' + server, 'PATCH', {'name': 'renamed.example.test', 'status': '', 'inventory_known': False, 'sort_order': 0}, owner, org)
+    call('/api/collections/servers/records/' + server, 'PATCH', {'status': 'SUSPENDED', 'sort_order': 7}, admin)
+    preserved = call('/api/collections/servers/records/' + server, 'PATCH', {'name': 'legacy.example.test', 'status': 'SUSPENDED', 'sort_order': 7, 'inventory_known': False}, owner, org)
+    assert preserved['status'] == 'SUSPENDED' and preserved['sort_order'] == 7
     call(path, 'PUT', profile, editor, org, 403)
     call(path, 'PUT', {**profile, 'password': 'must-never-be-stored'}, owner, org, 400)
     call(path, 'PUT', profile, owner, org)
@@ -195,6 +205,11 @@ def main(runtime):
     snapshot.update(sample_id=secrets.token_hex(16), observed_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
     call('/api/i7y/telemetry/v1/snapshots', 'POST', snapshot, agent)
     assert call(path, token=reader, org=org)['jobs'][0]['status'] == 'recovered'
+    assert call('/api/collections/servers/records/' + server, token=owner, org=org)['inventory_known'] is False
+    snapshot.update(sample_id=secrets.token_hex(16), observed_at=datetime.datetime.now(datetime.timezone.utc).isoformat(), docker_complete=True, collection_mode='docker')
+    call('/api/i7y/telemetry/v1/snapshots', 'POST', snapshot, agent)
+    observed = call('/api/collections/servers/records/' + server, token=owner, org=org)
+    assert observed['inventory_known'] is True and observed['status'] == 'SUSPENDED' and observed['sort_order'] == 7
     unknown = call(path + '/jobs', 'POST', {**body, 'request_id': str(uuid.uuid4()), 'action': 'shutdown'}, owner, org, 201)
     unknown_path = path + '/jobs/' + unknown['id']
     call(unknown_path + '/finish', 'POST', {'status': 'unknown', 'stage': 'unknown', 'reason': 'provider_unavailable'}, owner, org)
