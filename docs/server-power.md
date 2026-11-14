@@ -1,7 +1,7 @@
 # Manual VM power and encrypted boot
 
 An incident's **View server** action opens the server telemetry page. **Power and
-disk** offers **Start VM**, **Shut down VM**, **Check SNEL status** and the provider
+disk** offers **Start server**, **Shut down server**, **Check SNEL status** and the provider
 console. The server inventory action menu reaches the same page. These actions are
 operator initiated; no no-communication trigger or unattended vault access is added.
 
@@ -72,7 +72,9 @@ loaded from 1Password before use in this release. After changing VM metadata in 
 continue to block configuration changes.
 
 To unlock remotely, first prepare and validate a restricted SSH endpoint in the
-VM's initramfs. Record the verified boot host public key, boot SSH port and exact
+VM's initramfs. The [preparation script](boot-unlock-preparation.md) can build an
+isolated candidate for supported CentOS/RHEL 7 servers without changing active boot.
+Record the verified boot host public key, boot SSH port and exact
 LUKS UUID in the linked 1Password item, then load the configuration. The endpoint accepts only `status` and `unlock`: `status` lists active
 systemd password requests, and `unlock` queries their passwords. It must expose the
 disk UUID in the authenticated password request. Grant the selected local SSH
@@ -85,7 +87,7 @@ VPN VM. Do not assume either machine is prepared for later encrypted boots. Kern
 updates must preserve and revalidate the boot SSH endpoint and verified identity.
 No boot image, firewall, authorized key or default boot entry is changed by this UI.
 
-Without the boot key and UUID, **Start VM** can power on through SNEL and explicitly
+Without the boot key and UUID, **Start server** can power on through SNEL and explicitly
 reports that console disk unlock is required. It cannot deliver a password through
 the public SNEL User API: its documented operations cover VM state and power, not
 console keystrokes.
@@ -109,8 +111,8 @@ passwords and raw subprocess output remain in process memory; only allowlisted
 progress/result codes reach the UI and history. Temporary SSH configuration contains
 public host keys and identity paths, has private permissions and is removed afterward.
 
-**Start VM** requests power on only if SNEL reports the VM off. An already running VM
-is not shut down or rebooted. **Shut down VM** requests graceful `shutdown` and waits
+**Start server** requests power on only if SNEL reports the VM off. An already running VM
+is not shut down or rebooted. **Shut down server** requests graceful `shutdown` and waits
 for SNEL to report power off; it never invokes force-stop or reset. An uncertain API
 mutation is not retried. Another mutation remains blocked until an administrator
 inspects the provider console and explicitly reconciles the operation. Reconciliation
