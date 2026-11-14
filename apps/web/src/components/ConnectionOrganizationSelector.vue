@@ -13,4 +13,8 @@ const options=computed(()=>{
 const selected=computed(()=>{const value=JSON.stringify([desktopRuntime?activeConnectionId.value:'browser',activeOrganization.value]);return options.value.some(option=>option.value===value)?value:null})
 function select(value:string){const [connection,organization]=JSON.parse(value);emit('select',connection,organization)}
 </script>
-<template><q-select :model-value="selected" @update:model-value="select" :options="options" emit-value map-options outlined dense :dark="dark" :label="t('Organization')"><template #option="scope"><q-item v-bind="scope.itemProps"><q-item-section><q-item-label :class="scope.opt.header?'text-weight-bold text-caption':''">{{scope.opt.label}}</q-item-label></q-item-section></q-item></template></q-select></template>
+<template><q-select :model-value="selected" @update:model-value="select" :options="options" emit-value map-options outlined dense :dark="dark" :label="t('Organization')"><template #option="scope"><q-item v-bind="scope.itemProps"><q-item-section><q-item-label :class="scope.opt.header?'connection-group-label':''">{{scope.opt.label}}</q-item-label></q-item-section></q-item></template></q-select></template>
+
+<style scoped>
+.connection-group-label{color:var(--i7y-muted,#71717a);font-size:12px;line-height:18px;font-weight:400}
+</style>
