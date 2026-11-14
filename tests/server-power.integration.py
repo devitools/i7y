@@ -1,10 +1,12 @@
 import concurrent.futures
+import contextlib
 import datetime
 import json
 import os
 import pathlib
 import secrets
 import shutil
+import socket
 import subprocess
 import tempfile
 import time
@@ -15,6 +17,7 @@ import uuid
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BINARY = pathlib.Path(os.environ['I7Y_TEST_POCKETBASE']).resolve()
 NAME = 'i7y-power-test-' + secrets.token_hex(5)
+NATIVE = os.environ.get('I7Y_TEST_NATIVE') == '1'
 checks = 0
 
 
@@ -22,12 +25,77 @@ def docker(*args):
     return subprocess.check_output(['docker', *args], text=True).strip()
 
 
-def main(directory):
+class FixtureRuntime:
+    def __init__(self, directory):
+        self.directory = directory
+        self.process = None
+        self.log = None
+        self.container_started = False
+        self.base = ''
+
+    def start(self):
+        for name in ['hooks', 'migrations']:
+            shutil.copytree(ROOT / 'apps/backend' / name, self.directory / name)
+        if NATIVE:
+            (self.directory / 'hooks/main.pb.js').unlink()
+            with socket.socket() as listener:
+                listener.bind(('127.0.0.1', 0))
+                port = listener.getsockname()[1]
+            self.base = 'http://127.0.0.1:' + str(port)
+            self.log = (self.directory / 'pocketbase.log').open('w+')
+            environment = {key: value for key, value in os.environ.items() if not key.startswith('I7Y_')}
+            self.process = subprocess.Popen([
+                str(BINARY), 'serve', '--http=127.0.0.1:' + str(port),
+                '--dir=' + str(self.directory / 'data'),
+                '--hooksDir=' + str(self.directory / 'hooks'),
+                '--migrationsDir=' + str(self.directory / 'migrations'),
+            ], cwd=self.directory, env=environment, stdout=self.log, stderr=subprocess.STDOUT)
+        else:
+            self.container_started = True
+            docker('run', '--pull=never', '--rm', '-d', '--name', NAME, '-p', '127.0.0.1::8090', '-v', str(BINARY) + ':/pb/pocketbase:ro', '-v', str(self.directory) + ':/fixture:ro', 'alpine:3.22', '/pb/pocketbase', 'serve', '--http=0.0.0.0:8090', '--dir=/data', '--hooksDir=/fixture/hooks', '--migrationsDir=/fixture/migrations')
+            self.base = 'http://127.0.0.1:' + docker('port', NAME, '8090/tcp').rsplit(':', 1)[1]
+
+    def superuser(self, password):
+        if NATIVE:
+            subprocess.check_output([str(BINARY), 'superuser', 'upsert', 'power-admin@example.test', password, '--dir=' + str(self.directory / 'data')], cwd=self.directory, stderr=subprocess.STDOUT)
+        else:
+            docker('exec', NAME, '/pb/pocketbase', 'superuser', 'upsert', 'power-admin@example.test', password, '--dir=/data')
+
+    def logs(self):
+        if not NATIVE:
+            return docker('logs', NAME)
+        self.log.flush()
+        return (self.directory / 'pocketbase.log').read_text()
+
+    def close(self):
+        try:
+            if self.process is not None and self.process.poll() is None:
+                self.process.terminate()
+                try:
+                    self.process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+                    self.process.wait(timeout=5)
+            if self.container_started:
+                subprocess.run(['docker', 'rm', '-f', NAME], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        finally:
+            if self.log is not None:
+                self.log.close()
+
+
+@contextlib.contextmanager
+def fixture_runtime(directory):
+    runtime = FixtureRuntime(directory)
+    try:
+        runtime.start()
+        yield runtime
+    finally:
+        runtime.close()
+
+
+def main(runtime):
     global checks
-    for name in ['hooks', 'migrations']:
-        shutil.copytree(ROOT / 'apps/backend' / name, directory / name)
-    docker('run', '--pull=never', '--rm', '-d', '--name', NAME, '-p', '127.0.0.1::8090', '-v', str(BINARY) + ':/pb/pocketbase:ro', '-v', str(directory) + ':/fixture:ro', 'alpine:3.22', '/pb/pocketbase', 'serve', '--http=0.0.0.0:8090', '--dir=/data', '--hooksDir=/fixture/hooks', '--migrationsDir=/fixture/migrations')
-    base = 'http://127.0.0.1:' + docker('port', NAME, '8090/tcp').rsplit(':', 1)[1]
+    base = runtime.base
 
     def call(path, method='GET', body=None, token=None, org=None, expected=200):
         nonlocal base
@@ -54,9 +122,9 @@ def main(directory):
         except (OSError, urllib.error.URLError):
             time.sleep(0.1)
     else:
-        raise AssertionError(docker('logs', NAME))
+        raise AssertionError(runtime.logs())
     password = secrets.token_hex(24)
-    docker('exec', NAME, '/pb/pocketbase', 'superuser', 'upsert', 'power-admin@example.test', password, '--dir=/data')
+    runtime.superuser(password)
     admin = call('/api/collections/_superusers/auth-with-password', 'POST', {'identity': 'power-admin@example.test', 'password': password})['token']
     def create(collection, body):
         return call('/api/collections/' + collection + '/records', 'POST', body, admin)
@@ -146,7 +214,5 @@ def main(directory):
 
 if __name__ == '__main__':
     with tempfile.TemporaryDirectory(prefix='i7y-power-fixture-') as temporary:
-        try:
-            main(pathlib.Path(temporary))
-        finally:
-            subprocess.run(['docker', 'rm', '-f', NAME], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        with fixture_runtime(pathlib.Path(temporary)) as runtime:
+            main(runtime)

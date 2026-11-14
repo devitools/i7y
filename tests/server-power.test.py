@@ -1,6 +1,7 @@
 import contextlib
 import copy
 import importlib.util
+import http.client
 import io
 import json
 import pathlib
@@ -111,6 +112,45 @@ class PowerTests(unittest.TestCase):
         result = self.run_action()
         self.assertEqual(result['status'], 'unknown')
         self.assertEqual(self.provider.changes, ['start'])
+        self.read_vault.assert_not_called()
+
+    def test_incomplete_provider_response_is_classified_as_unavailable(self):
+        provider = power.Provider(REQUEST['target'])
+        response = unittest.mock.MagicMock()
+        response.__enter__.return_value.read.side_effect = http.client.IncompleteRead(b'partial')
+        with patch.object(provider.opener, 'open', return_value=response) as opened:
+            with self.assertRaises(power.Failure) as error:
+                provider.change('start')
+        self.assertEqual(error.exception.reason, 'provider_unavailable')
+        self.assertEqual(opened.call_count, 1)
+
+    def test_unexpected_exception_after_power_dispatch_preserves_unknown_outcome(self):
+        for action in ['start', 'shutdown']:
+            for failure in [http.client.IncompleteRead(b'partial'), RuntimeError('fixture')]:
+                with self.subTest(action=action, failure=type(failure).__name__):
+                    self.provider = Provider(None)
+                    self.provider.power = action == 'shutdown'
+                    def change(value):
+                        self.provider.changes.append(value)
+                        raise failure
+                    self.provider.change = change
+                    result = self.run_action(action)
+                    self.assertEqual(result['status'], 'unknown')
+                    self.assertEqual(self.provider.changes, [action])
+        self.read_vault.assert_not_called()
+
+    def test_exception_during_mutation_verification_preserves_unknown_outcome(self):
+        for action in ['start', 'shutdown']:
+            with self.subTest(action=action):
+                self.provider = Provider(None)
+                self.provider.power = action == 'shutdown'
+                def change(value):
+                    self.provider.changes.append(value)
+                    self.provider.state = lambda: (_ for _ in ()).throw(http.client.RemoteDisconnected())
+                self.provider.change = change
+                result = self.run_action(action)
+                self.assertEqual(result['status'], 'unknown')
+                self.assertEqual(self.provider.changes, [action])
         self.read_vault.assert_not_called()
 
     def test_shutdown_is_graceful_and_verified(self):

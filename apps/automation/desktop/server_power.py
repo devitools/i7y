@@ -1,3 +1,4 @@
+import http.client
 import ipaddress
 import json
 import os
@@ -79,7 +80,7 @@ class Provider:
                 return data
         except urllib.error.HTTPError as error:
             raise Failure('provider_rejected' if error.code in [400, 401, 403, 404, 422] else 'provider_unavailable') from None
-        except (OSError, ValueError):
+        except (OSError, ValueError, http.client.HTTPException):
             raise Failure('provider_unavailable') from None
 
     def login(self):
@@ -253,7 +254,7 @@ def run(request, provider_factory=Provider, boot_factory=Boot, sleep=time.sleep,
                     if provider.state() is False:
                         return {'status': 'powered_off', 'stage': 'powered_off'}
                     sleep(3)
-            except Failure:
+            except Exception:
                 return {'status': 'unknown', 'stage': 'unknown', 'reason': 'provider_unavailable'}
             return {'status': 'unknown', 'stage': 'unknown', 'reason': 'provider_unavailable'}
         return {'status': 'powered_off', 'stage': 'powered_off'}
@@ -268,7 +269,7 @@ def run(request, provider_factory=Provider, boot_factory=Boot, sleep=time.sleep,
                 sleep(3)
             else:
                 return {'status': 'unknown', 'stage': 'unknown', 'reason': 'provider_unavailable'}
-        except Failure:
+        except Exception:
             return {'status': 'unknown', 'stage': 'unknown', 'reason': 'provider_unavailable'}
     if not target.get('boot_host_key') or not target.get('luks_uuid'):
         return {'status': 'requires_console', 'stage': 'requires_console', 'reason': 'boot_unavailable'}
