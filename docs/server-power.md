@@ -14,14 +14,32 @@ It uses the signed desktop's current backend, organization and user session.
 ## Configuration
 
 Install the backend migration and hooks with the matching web and desktop release.
-An administrator links **Secret manager → 1Password**, account, vault and item in
-**Edit server → Credential reference**. The workspace has an independent reference
-to its provider login item. Existing vault/item references remain compatible with
-the CLI's default account; set the account ID or sign-in address to select it
-explicitly. No global account selection overrides either reference. Only 1Password
-is supported. These fields store references, never passwords.
+An administrator links a credential reference in **Edit server**. The workspace
+has an independent reference to its provider login item. References use a generic
+versioned shape; the `vault` field identifies the secret manager:
 
-In **Power and disk → 1Password configuration**, choose **Load from 1Password**.
+```json
+{"version":2,"vault":"1password","account":"Disk Ninja","item":"SNEL VPN VPS Server"}
+```
+
+`options.vault` optionally selects a vault inside the 1Password
+adapter. It preserves the meaning of the old unversioned `vault` field. For example,
+`{"vault":"Infrastructure","item":"VPN"}` normalizes to
+`{"version":2,"vault":"1password","account":"","item":"VPN","options":{"vault":"Infrastructure"}}`.
+Only explicit version 2 is canonical; an unversioned reference remains legacy even
+if its physical vault was named `1password`. Unknown versions are rejected. Reading
+or validating an existing record never rewrites it. Editing can save its equivalent
+canonical reference without changing its identity.
+
+The reference stores metadata, not passwords, tokens or private keys. Manager IDs
+are generic; 1Password is the currently implemented adapter. Unknown managers fail
+with `vault_unsupported` before executable discovery, provider access or any CLI.
+The Python adapter lives in `i7y_vault.py` and the desktop embeds that module in its
+isolated runner, so it does not depend on the working directory or temporary files.
+Accounts, items and adapter options are resolved independently for server/workspace.
+An empty legacy account uses the adapter's default account.
+
+In **Power and disk → Credential configuration**, choose **Load configuration**.
 The desktop reads text and URL fields from the linked server item locally using
 `op item get --fields type=STRING,type=URL` and saves only validated VM and boot
 metadata. Keep configuration values in text/URL fields; concealed and OTP fields

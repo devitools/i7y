@@ -5,6 +5,16 @@ use std::{io::{BufRead, BufReader, Read, Write}, path::PathBuf, process::{Comman
 use tauri::{Emitter, Manager};
 
 const RUNNER: &str = include_str!("../../../automation/desktop/server_power.py");
+const VAULT_ADAPTER: &str = include_str!("../../../automation/desktop/i7y_vault.py");
+
+fn vault_bootstrap() -> String {
+    format!("import sys, types\nvault_module = types.ModuleType('i7y_vault')\nexec({}, vault_module.__dict__)\nsys.modules['i7y_vault'] = vault_module", serde_json::to_string(VAULT_ADAPTER).unwrap())
+}
+
+fn runner_source() -> String {
+    format!("{}\n{}", vault_bootstrap(), RUNNER)
+}
+
 const CATALOG: &str = include_str!("../../../automation/desktop/actions.json");
 
 fn supported_action(action: &str) -> bool {
@@ -119,14 +129,14 @@ struct Message { kind: String, stage: String, status: Option<String>, reason: Op
 
 fn message(line: &str) -> Result<Message, String> {
     let value: Message = serde_json::from_str(line).map_err(|_| "operation_interrupted")?;
-    if !["progress", "result"].contains(&value.kind.as_str()) || !["checking_provider", "power_on_requested", "power_off_requested", "waiting_for_boot", "checking_boot", "unlocking_disk", "awaiting_agent", "powered_off", "requires_console", "provider_on", "provider_off", "unknown", "failed"].contains(&value.stage.as_str()) || value.status.as_ref().is_some_and(|s|!["observed", "failed", "unknown", "powered_off", "requires_console", "awaiting_agent"].contains(&s.as_str())) || value.reason.as_ref().is_some_and(|s|!["provider_unavailable", "provider_rejected", "provider_target_missing", "vault_unavailable", "boot_unavailable", "boot_identity_mismatch", "disk_key_rejected", "unlock_unconfirmed", "runtime_unavailable", "context_changed", "operation_interrupted", "invalid_target", "agent_timeout"].contains(&s.as_str())) { return Err("operation_interrupted".into()); }
+    if !["progress", "result"].contains(&value.kind.as_str()) || !["checking_provider", "power_on_requested", "power_off_requested", "waiting_for_boot", "checking_boot", "unlocking_disk", "awaiting_agent", "powered_off", "requires_console", "provider_on", "provider_off", "unknown", "failed"].contains(&value.stage.as_str()) || value.status.as_ref().is_some_and(|s|!["observed", "failed", "unknown", "powered_off", "requires_console", "awaiting_agent"].contains(&s.as_str())) || value.reason.as_ref().is_some_and(|s|!["provider_unavailable", "provider_rejected", "provider_target_missing", "vault_unavailable", "vault_unsupported", "boot_unavailable", "boot_identity_mismatch", "disk_key_rejected", "unlock_unconfirmed", "runtime_unavailable", "context_changed", "operation_interrupted", "invalid_target", "agent_timeout"].contains(&s.as_str())) { return Err("operation_interrupted".into()); }
     Ok(value)
 }
 
 fn run(app: &tauri::AppHandle, context: &PowerContext, path: &str, payload: &Value, request_id: &str, server_id: &str) -> Result<Value, String> {
     let python = ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"].iter().find(|p|std::path::Path::new(p).is_file()).ok_or("runtime_unavailable")?;
     let mut command = Command::new(python);
-    command.args(["-I", "-u", "-c", RUNNER]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    command.args(["-I", "-u", "-c", &runner_source()]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
     #[cfg(unix)] { use std::os::unix::process::CommandExt; command.process_group(0); }
     check_context(app, context)?;
     let mut child = command.spawn().map_err(|_| "runtime_unavailable")?;
@@ -175,7 +185,7 @@ fn configuration_message(bytes: &[u8]) -> Result<VaultConfiguration, String> {
     let value: Value = serde_json::from_slice(bytes).map_err(|_| "vault_metadata_invalid")?;
     if value["kind"] == "result" {
         let reason = value["reason"].as_str().unwrap_or("");
-        return Err(if ["vault_unavailable","vault_metadata_missing","vault_metadata_invalid","vault_target_mismatch","runtime_unavailable","invalid_target"].contains(&reason) {reason} else {"vault_metadata_invalid"}.into());
+        return Err(if ["vault_unavailable","vault_unsupported","vault_metadata_missing","vault_metadata_invalid","vault_target_mismatch","runtime_unavailable","invalid_target"].contains(&reason) {reason} else {"vault_metadata_invalid"}.into());
     }
     if value["kind"] != "configuration" || value.as_object().map_or(true,|object|object.len()!=2) {return Err("vault_metadata_invalid".into())}
     let profile: VaultConfiguration = serde_json::from_value(value["profile"].clone()).map_err(|_| "vault_metadata_invalid")?;
@@ -192,7 +202,7 @@ fn configuration_message(bytes: &[u8]) -> Result<VaultConfiguration, String> {
 fn read_configuration(app: &tauri::AppHandle, context: &PowerContext, payload: Value) -> Result<VaultConfiguration, String> {
     let python=["/opt/homebrew/bin/python3","/usr/local/bin/python3","/usr/bin/python3"].iter().find(|path|std::path::Path::new(path).is_file()).ok_or("runtime_unavailable")?;
     let mut command=Command::new(python);
-    command.args(["-I","-u","-c",RUNNER]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    command.args(["-I","-u","-c",&runner_source()]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
     #[cfg(unix)] {use std::os::unix::process::CommandExt;command.process_group(0);}
     check_context(app,context)?;
     let mut child=command.spawn().map_err(|_|"runtime_unavailable")?;
@@ -280,6 +290,18 @@ pub async fn server_power_run(app: tauri::AppHandle, organization: String, serve
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn embedded_vault_adapter_runs_without_cwd_modules_or_cli_access() {
+        let python=["/opt/homebrew/bin/python3","/usr/local/bin/python3","/usr/bin/python3"].iter().find(|path|std::path::Path::new(path).is_file()).unwrap();
+        let source=format!("{}\nvault_module.executable = lambda name: (_ for _ in ()).throw(RuntimeError('CLI forbidden in fixture'))\n{}",vault_bootstrap(),RUNNER);
+        let mut child=Command::new(python).args(["-I","-u","-c",&source]).current_dir(std::env::temp_dir()).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        child.stdin.take().unwrap().write_all(br#"{"action":"configuration","target":{"address":"192.0.2.1","disk_credential":{"version":2,"vault":"future-manager","account":"Fixture","item":"Fixture"}}}"#).unwrap();
+        let output=child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        let result:Value=serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["reason"],"vault_unsupported");
+        assert_eq!(configuration_message(&output.stdout).err().unwrap(),"vault_unsupported");
+    }
     #[test]
     fn vault_configuration_filters_secrets_and_rejects_ambiguous_payloads() {
         let profile=json!({"service_id":"123","vm_id":"456","boot_port":2222,"boot_host_key":"","luks_uuid":""});

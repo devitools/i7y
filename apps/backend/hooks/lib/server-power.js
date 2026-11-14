@@ -1,11 +1,11 @@
 const actions=['inspect','start','shutdown']
 const stages=['checking_provider','power_on_requested','power_off_requested','waiting_for_boot','checking_boot','unlocking_disk','awaiting_agent','powered_off','requires_console','provider_on','provider_off','unknown','failed']
-const reasons=['','provider_unavailable','provider_rejected','provider_target_missing','vault_unavailable','boot_unavailable','boot_identity_mismatch','disk_key_rejected','unlock_unconfirmed','runtime_unavailable','context_changed','operation_interrupted','invalid_target','agent_timeout']
+const reasons=['','provider_unavailable','provider_rejected','provider_target_missing','vault_unavailable','vault_unsupported','boot_unavailable','boot_identity_mismatch','disk_key_rejected','unlock_unconfirmed','runtime_unavailable','context_changed','operation_interrupted','invalid_target','agent_timeout']
 function fail(status,message){throw new ApiError(status,message)}
 function rows(app,name,filter,params={},sort='',limit=100){return app.findRecordsByFilter(name,filter,sort,limit,0,params)}
 function date(value){return Date.parse(String(value||'').replace(' ','T'))||0}
 function json(record,key,fallback={}){try{return JSON.parse(record.getString(key)||'null')||fallback}catch(_){return fallback}}
-function credential(record){try{const value=require(__hooks+'/lib/vault-reference.js').normalize(json(record,'credential'));if(!value)throw new Error();return value}catch(_){fail(409,'Configure the 1Password reference in the server and workspace inventory first')}}
+function credential(record){try{const value=require(__hooks+'/lib/vault-reference.js').normalize(json(record,'credential'));if(!value)throw new Error();return value}catch(_){fail(409,'Configure the credential references in the server and workspace inventory first')}}
 function configuration(c){
   const references={server:c.server.id,workspace:c.workspace.id,address:c.server.getString('ip'),provider_credential:credential(c.workspace),disk_credential:credential(c.server)}
   return {...references,credential_binding:$security.sha256(JSON.stringify(references))}
@@ -23,7 +23,7 @@ function profile(app,c){return rows(app,'server_power_profiles','server={:server
 function target(app,c){
   const p=profile(app,c);if(!p)fail(409,'Configure the SNEL server mapping first')
   const configured=configuration(c)
-  if(!p.getString('credential_binding')||p.getString('credential_binding')!==configured.credential_binding)fail(409,'Reload the VM configuration from its linked 1Password item')
+  if(!p.getString('credential_binding')||p.getString('credential_binding')!==configured.credential_binding)fail(409,'Reload the VM configuration from its linked credential item')
   if(!/snel/i.test(c.workspace.getString('provider')+' '+c.workspace.getString('query')))fail(409,'This server is not mapped to SNEL')
   return {id:c.server.id,organization:c.org,name:c.server.getString('name'),address:c.server.getString('ip'),service_id:p.getString('service_id'),vm_id:p.getString('vm_id'),version:p.getInt('version'),provider_credential:configured.provider_credential,disk_credential:configured.disk_credential,boot_port:p.getInt('boot_port'),boot_host_key:p.getString('boot_host_key'),luks_uuid:p.getString('luks_uuid')}
 }
@@ -52,7 +52,7 @@ function handle(e,operation){let result;e.app.runInTransaction(app=>{
     if((p?p.getInt('version'):0)!==body.version)fail(409,'Server settings changed; reload before saving')
     if(Object.keys(body).some(k=>!['version','service_id','vm_id','boot_port','boot_host_key','luks_uuid','credential_binding'].includes(k)))fail(400,'Unsupported setting')
     const configured=configuration(c)
-    if(body.credential_binding!==configured.credential_binding)fail(409,'The inventory reference changed; reload from 1Password')
+    if(body.credential_binding!==configured.credential_binding)fail(409,'The inventory reference changed; reload the credential configuration')
     if(typeof body.service_id!=='string'||typeof body.vm_id!=='string'||!/^[1-9][0-9]{0,15}$/.test(body.service_id)||!/^[1-9][0-9]{0,15}$/.test(body.vm_id))fail(400,'Provide the SNEL service and VM identifiers')
     if(rows(app,'server_power_profiles','service_id={:service} && vm_id={:vm} && server!={:server}',{service:body.service_id,vm:body.vm_id,server:c.server.id},'',1).length)fail(409,'This SNEL VM is already mapped to another server')
     if(!Number.isInteger(body.boot_port)||body.boot_port<1||body.boot_port>65535)fail(400,'Invalid boot SSH port')

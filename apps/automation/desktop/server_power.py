@@ -16,9 +16,14 @@ import urllib.request
 import urllib.parse
 
 
-class Failure(Exception):
-    def __init__(self, reason):
-        self.reason = reason
+try:
+    import i7y_vault as vaults
+except ModuleNotFoundError:
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('i7y_vault', pathlib.Path(__file__).with_name('i7y_vault.py'))
+    vaults = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(vaults)
+Failure = vaults.Failure
 
 
 def emit(**value):
@@ -33,35 +38,11 @@ def executable(name):
 
 
 def validate_reference(reference):
-    if not isinstance(reference, dict) or reference.get('provider', '1password') != '1password':
-        raise Failure('invalid_target')
-    for part in ['item', 'vault', 'account']:
-        value = reference.get(part, '')
-        if not isinstance(value, str) or part != 'account' and not value or value.startswith('-') or len(value) > 240 or re.search(r'[\x00-\x1f]', value):
-            raise Failure('invalid_target')
+    vaults.adapter(reference)
 
 
-def op_item(reference, otp=False, metadata=False):
-    validate_reference(reference)
-    args = [executable('op'), 'item', 'get', reference['item'], '--vault', reference['vault']]
-    if reference.get('account'):
-        args += ['--account', reference['account']]
-    if metadata:
-        args += ['--fields', 'type=STRING,type=URL']
-    args += ['--otp'] if otp else ['--format', 'json']
-    try:
-        result = subprocess.run(args, capture_output=True, timeout=120, check=False)
-        if result.returncode or len(result.stdout) > 1048576:
-            raise Failure('vault_unavailable')
-        value = result.stdout.decode().strip() if otp else json.loads(result.stdout)
-        if metadata:
-            if isinstance(value, list):
-                return {'fields': value}
-            if isinstance(value, dict) and 'fields' not in value and ('id' in value or 'label' in value):
-                return {'fields': [value]}
-        return value
-    except (OSError, subprocess.TimeoutExpired, UnicodeError, ValueError):
-        raise Failure('vault_unavailable') from None
+def vault_item(reference, otp=False, metadata=False):
+    return vaults.adapter(reference).item(otp=otp, metadata=metadata)
 
 
 def field(item, name):
@@ -104,13 +85,13 @@ class Provider:
 
     def login(self):
         reference = self.target['provider_credential']
-        item = op_item(reference)
+        item = vault_item(reference)
         response = self.request('login', {'username': field(item, 'username'), 'password': field(item, 'password')})
         mfa = response.get('mfa')
         if mfa:
             if 'google_authenticator' not in mfa.get('methods', []):
                 raise Failure('vault_unavailable')
-            response = self.request('mfa/verify', {'method': 'google_authenticator', 'payload': {'code': op_item(reference, otp=True)}}, mfa['token'])
+            response = self.request('mfa/verify', {'method': 'google_authenticator', 'payload': {'code': vault_item(reference, otp=True)}}, mfa['token'])
         if not isinstance(response.get('token'), str) or not response['token']:
             raise Failure('provider_rejected')
         self.token = response['token']
@@ -150,7 +131,7 @@ def configuration(request):
     target = request['target']
     validate_reference(target['disk_credential'])
     address = ipaddress.ip_address(target['address'])
-    item = op_item(target['disk_credential'], metadata=True)
+    item = vault_item(target['disk_credential'], metadata=True)
     if not isinstance(item, dict):
         raise Failure('vault_metadata_invalid')
     fields = item.get('fields', [])
@@ -360,7 +341,7 @@ def run(request, provider_factory=Provider, boot_factory=Boot, sleep=time.sleep,
         emit(kind='progress', stage='checking_boot')
         if not boot.status():
             return {'status': 'requires_console', 'stage': 'requires_console', 'reason': 'boot_unavailable'}
-        secret = field(op_item(target['disk_credential']), 'Disk Encryption Password')
+        secret = field(vault_item(target['disk_credential']), 'Disk Encryption Password')
         emit(kind='progress', stage='unlocking_disk')
         boot.unlock(secret)
         secret = None

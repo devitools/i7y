@@ -135,12 +135,15 @@ def main(runtime):
     org = create('organizations', {'name': 'Power fixture'})['id']
     other_org = create('organizations', {'name': 'Power isolation'})['id']
     owner, editor, reader, outsider = person('admin', org), person('editor', org), person('reader', org), person('admin', other_org)
-    credential = {'provider': '1password', 'account': 'fixture.example.com', 'vault': 'Fixture vault', 'item': 'Fixture reference'}
-    workspace = create('workspaces', {'organization': org, 'login': 'fixture@example.test', 'provider': 'SNEL', 'credential': credential})
+    credential = {'version': 2, 'vault': '1password', 'account': 'fixture.example.com', 'item': 'Fixture reference', 'options': {'vault': 'Fixture vault'}}
+    legacy = {'provider': '1password', 'account': 'fixture.example.com', 'vault': 'Fixture vault', 'item': 'Fixture reference'}
+    workspace = create('workspaces', {'organization': org, 'login': 'fixture@example.test', 'provider': 'SNEL', 'credential': legacy})
     server = create('servers', {'workspace': workspace['id'], 'name': 'fixture.example.test', 'ip': '192.0.2.10', 'type': 'VPS', 'credential': credential})['id']
     path = '/api/i7y/server-power/v1/servers/' + server
     configuration = call(path, token=owner, org=org)['configuration']
     assert configuration['disk_credential'] == credential
+    assert configuration['provider_credential'] == credential
+    assert call('/api/collections/workspaces/records/' + workspace['id'], token=owner, org=org)['credential'] == legacy
     profile = {'credential_binding': configuration['credential_binding'], 'version': 0, 'service_id': '123', 'vm_id': '456', 'boot_port': 2222, 'boot_host_key': '', 'luks_uuid': ''}
     call(path, expected=401)
     call(path, token=outsider, org=org, expected=403)

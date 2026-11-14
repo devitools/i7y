@@ -60,7 +60,7 @@ class PowerTests(unittest.TestCase):
         self.boot = Boot(None)
         self.output = io.StringIO()
         self.secret = 'fixture-disk-secret'
-        self.vault = patch.object(power, 'op_item', return_value={'fields': [{'label': 'Disk Encryption Password', 'value': self.secret}]})
+        self.vault = patch.object(power, 'vault_item', return_value={'fields': [{'label': 'Disk Encryption Password', 'value': self.secret}]})
         self.read_vault = self.vault.start()
         self.addCleanup(self.vault.stop)
 
@@ -204,7 +204,7 @@ class VaultConfigurationTests(unittest.TestCase):
         self.item = {'fields': [{'label': 'SNEL service ID', 'value': '123'}, {'label': 'SNEL VM ID', 'value': '456'}, {'id': 'password', 'value': 'never-output-this'}, {'label': 'Disk Encryption Password', 'value': 'another-secret'}]}
 
     def read(self):
-        with patch.object(power, 'op_item', return_value=self.item) as read:
+        with patch.object(power, 'vault_item', return_value=self.item) as read:
             result = power.configuration(self.request)
         self.assertEqual(read.call_args.args[0], self.reference)
         self.assertEqual(read.call_args.kwargs, {'metadata': True})
@@ -248,17 +248,17 @@ class VaultConfigurationTests(unittest.TestCase):
 
     def test_cli_reads_the_saved_account_and_rejects_option_injection(self):
         response = unittest.mock.Mock(returncode=0, stdout=b'{"fields":[]}')
-        with patch.object(power, 'executable', return_value='/fixture/op'), patch.object(power.subprocess, 'run', return_value=response) as run:
-            power.op_item(self.reference)
+        with patch.object(power.vaults, 'executable', return_value='/fixture/op'), patch.object(power.subprocess, 'run', return_value=response) as run:
+            power.vault_item(self.reference)
             self.assertEqual(run.call_args.args[0], ['/fixture/op', 'item', 'get', 'VPN server', '--vault', 'Infrastructure', '--account', 'team.example.com', '--format', 'json'])
             with self.assertRaises(power.Failure):
-                power.op_item({**self.reference, 'account': '--help'})
+                power.vault_item({**self.reference, 'account': '--help'})
             self.assertEqual(run.call_count, 1)
 
     def test_metadata_cli_read_excludes_concealed_and_otp_fields(self):
         response = unittest.mock.Mock(returncode=0, stdout=b'[{"label":"SNEL VM ID","type":"STRING","value":"456"}]')
-        with patch.object(power, 'executable', return_value='/fixture/op'), patch.object(power.subprocess, 'run', return_value=response) as run:
-            item = power.op_item(self.reference, metadata=True)
+        with patch.object(power.vaults, 'executable', return_value='/fixture/op'), patch.object(power.subprocess, 'run', return_value=response) as run:
+            item = power.vault_item(self.reference, metadata=True)
         self.assertIn('type=STRING,type=URL', run.call_args.args[0])
         self.assertNotIn('--reveal', run.call_args.args[0])
         self.assertEqual(item['fields'][0]['value'], '456')
@@ -270,11 +270,55 @@ class VaultConfigurationTests(unittest.TestCase):
         request['target']['disk_credential']['account'] = 'server-account'
         provider = Provider(None)
         targets = []
-        with patch.object(power, 'op_item', return_value={'fields': [{'label': 'Disk Encryption Password', 'value': 'fixture'}]}) as read, contextlib.redirect_stdout(io.StringIO()):
+        with patch.object(power, 'vault_item', return_value={'fields': [{'label': 'Disk Encryption Password', 'value': 'fixture'}]}) as read, contextlib.redirect_stdout(io.StringIO()):
             power.run(request, lambda target: targets.append(target) or provider, lambda _: Boot(None))
         self.assertEqual(targets[0]['provider_credential']['account'], 'provider-account')
         self.assertEqual(read.call_args.args[0]['account'], 'server-account')
 
+
+class GenericVaultTests(unittest.TestCase):
+    def test_python_matches_the_shared_reference_contract(self):
+        fixture = json.loads((ROOT / 'tests/fixtures/credential-references.json').read_text())
+        for case in fixture['valid']:
+            with self.subTest(case=case):
+                self.assertEqual(power.vaults.normalize(case['input']), case['expected'])
+        for value in fixture['invalid']:
+            with self.subTest(value=value), self.assertRaises(power.Failure):
+                power.vaults.normalize(value)
+
+    def test_unknown_manager_stops_before_any_cli_or_provider_access(self):
+        reference = {'version': 2, 'vault': 'future-vault', 'account': 'Team', 'item': 'VM'}
+        with patch.object(power.vaults, 'executable') as executable, patch.object(power.vaults.subprocess, 'run') as run:
+            with self.assertRaises(power.Failure) as error:
+                power.vault_item(reference)
+            self.assertEqual(error.exception.reason, 'vault_unsupported')
+            executable.assert_not_called()
+            run.assert_not_called()
+        request = copy.deepcopy(REQUEST)
+        request['target']['provider_credential'] = reference
+        with patch.object(power, 'Provider') as provider:
+            with self.assertRaises(power.Failure):
+                power.run(request, provider_factory=provider)
+            provider.assert_not_called()
+
+    def test_invalid_or_secret_references_never_reach_cli(self):
+        fixture = json.loads((ROOT / 'tests/fixtures/credential-references.json').read_text())
+        with patch.object(power.vaults, 'executable') as executable, patch.object(power.vaults.subprocess, 'run') as run:
+            for value in fixture['invalid']:
+                with self.subTest(value=value), self.assertRaises(power.Failure):
+                    power.vault_item(value)
+            executable.assert_not_called()
+            run.assert_not_called()
+
+    def test_manager_name_is_never_forwarded_as_the_onepassword_vault_name(self):
+        reference = {'version': 2, 'vault': '1password', 'account': 'Disk Ninja', 'item': 'SNEL VPN VPS Server'}
+        response = unittest.mock.Mock(returncode=0, stdout=b'{"fields":[]}')
+        with patch.object(power.vaults, 'executable', return_value='/fixture/op'), patch.object(power.vaults.subprocess, 'run', return_value=response) as run:
+            power.vault_item(reference)
+            self.assertEqual(run.call_args.args[0], ['/fixture/op', 'item', 'get', 'SNEL VPN VPS Server', '--account', 'Disk Ninja', '--format', 'json'])
+            power.vault_item({**reference, 'options': {'vault': 'Real vault'}})
+            self.assertIn('Real vault', run.call_args.args[0])
+            self.assertNotIn('1password', run.call_args.args[0])
 
 if __name__ == '__main__':
     unittest.main()
