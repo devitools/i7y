@@ -13,8 +13,11 @@ import { useTheme } from '@/theme/colors';
 
 export default function IncidentScreen() {
   const c = useTheme();
-  const { id } = useLocalSearchParams<{ id: string }>();
-  const { api, queryKey, organizationId, organization, session } = useI7y();
+  const { id, connectionId, loginId, organizationId } = useLocalSearchParams<{ id: string; connectionId: string; loginId: string; organizationId: string }>();
+  const { getSource } = useI7y();
+  const source = getSource(connectionId, loginId, organizationId);
+  const available = !!source;
+  const { api, queryKey, organization, session } = source ?? { api: null, queryKey: ['unavailable', connectionId, loginId, organizationId], organization: null, session: null };
   const cache = useQueryClient();
   const key = [...queryKey, 'incident', id];
   const context = JSON.stringify(key);
@@ -27,19 +30,19 @@ export default function IncidentScreen() {
   const [notice, setNotice] = useState<{ context: string; text: string } | null>(null);
   const [blocked, setBlocked] = useState<string | null>(null);
   const submitting = useRef(false);
-  const query = useQuery({ queryKey: key, enabled: !!organizationId && !!id && !!session, queryFn: () => api.incident(id) });
+  const query = useQuery({ queryKey: key, enabled: !!source && !!id, queryFn: () => api!.incident(id) });
   const incident = query.data;
   const { refetch } = query;
   const busy = operation?.context === context;
   const needsConfirmation = blocked === context;
   const refresh = useCallback(async () => {
-    if (!organizationId || !id) return;
+    if (!available || !id) return;
     const result = await refetch();
     if (activeContext.current === context && result.isSuccess) {
       setBlocked(previous => previous === context ? null : previous);
       setNotice(previous => previous?.context === context && previous.text === t('uncertain') ? { context, text: t('confirmed') } : previous);
     }
-  }, [organizationId, id, refetch, context]);
+  }, [available, id, refetch, context]);
   useForegroundRefresh(refresh);
   useFocusEffect(useCallback(() => { void refresh(); }, [refresh]));
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 15000); return () => clearInterval(timer); }, []);
@@ -51,7 +54,7 @@ export default function IncidentScreen() {
   const canWrite = !!organization && organization.role !== 'reader';
   const ownedByOther = !!incident?.assignee && incident.assignee !== session?.record.id && phase === 'inProgress';
   async function act(kind: 'claim' | 'resolve') {
-    if (submitting.current || busy || needsConfirmation || !incident || incident.status === 'resolved' || !canWrite || (AppState.currentState !== null && AppState.currentState !== 'active')) return;
+    if (submitting.current || busy || needsConfirmation || !incident || incident.status === 'resolved' || !canWrite || !api || (AppState.currentState !== null && AppState.currentState !== 'active')) return;
     const actionTime = Date.now();
     const actionBase = incident.assignee === session?.record.id ? Math.max(actionTime, incidentTimestamp(incident.claim_until) || actionTime) : actionTime;
     const actionDeadline = actionBase + minutes * 60000;
@@ -62,7 +65,7 @@ export default function IncidentScreen() {
     try {
       const result = kind === 'claim' ? await api.claim(id, new Date(actionDeadline).toISOString(), incident.version) : await api.resolve(id, incident.version);
       cache.setQueryData<Incident>(key, result);
-      await cache.invalidateQueries({ queryKey: [...queryKey, 'incidents'] });
+      await cache.invalidateQueries({ queryKey: ['inbox'] });
       await cache.invalidateQueries({ queryKey: key });
     } catch (error) {
       if (activeContext.current !== requestContext || error instanceof ContextChangedError) return;
@@ -71,7 +74,7 @@ export default function IncidentScreen() {
       setNotice({ context, text: t(conflict ? 'conflict' : ambiguous ? 'uncertain' : 'actionError') });
       if (conflict || ambiguous) {
         setBlocked(context);
-        await cache.invalidateQueries({ queryKey: [...queryKey, 'incidents'] });
+        await cache.invalidateQueries({ queryKey: ['inbox'] });
         await refresh();
       }
     } finally {
@@ -89,11 +92,12 @@ export default function IncidentScreen() {
     <Stack.Title>{t('incident')}</Stack.Title>
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
       <ScrollView contentInsetAdjustmentBehavior="automatic" keyboardShouldPersistTaps="handled" contentContainerStyle={screenContent} refreshControl={<RefreshControl refreshing={query.isRefetching} onRefresh={() => void refresh()} tintColor={c.brand} />}>
-        {!organizationId ? <Empty title={t('noOrganizations')} body={t('noOrganizationsBody')} /> : !incident ? query.error || query.fetchStatus === 'paused' ? <Empty title={t('noIncident')} body={t('noIncidentBody')}><Notice message={t('requestError')} retry={() => void refresh()} /></Empty> : <Loading /> : <>
+        {!source ? <Empty title={t('noIncident')} body={t('noIncidentBody')} /> : !incident ? query.error || query.fetchStatus === 'paused' ? <Empty title={t('noIncident')} body={t('noIncidentBody')}><Notice message={t('requestError')} retry={() => void refresh()} /></Empty> : <Loading /> : <>
           <View style={{ gap: 10 }}><Copy size={13} weight="600">{t(incident.severity) + ' · ' + t(phase)}</Copy><Copy size={28} weight="600">{incident.title}</Copy><Copy muted>{incident.resource_name || incident.resource_id}</Copy>{incident.assignee === session?.record.id && <Copy size={13} weight="600">{t('mine')}</Copy>}</View>
           {query.error && <Notice message={t('refreshError')} retry={() => void refresh()} />}
           {notice?.context === context && <Notice message={notice.text} retry={needsConfirmation ? () => void refresh() : undefined} />}
           <Section title={t('details')}>
+            <Fact label={t('server')} value={source?.connection.profile.name ?? ''} /><Fact label={t('organization')} value={organization?.name ?? organizationId} />
             <Fact label={t('resource')} value={incident.resource_name || incident.resource_id} /><Fact label={t('origin')} value={incident.origin} /><Fact label={t('opened')} value={formatDate(incident.opened_at)} />
             <Fact label={t('assignee')} value={incident.assignee || t('unassigned')} />
             {!!incident.assignee && <Fact label={t('deadline')} value={formatDate(incident.claim_until)} />}

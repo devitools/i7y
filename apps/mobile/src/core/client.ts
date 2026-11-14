@@ -57,7 +57,7 @@ export interface ClientState { serverUrl: string; session: Session | null; organ
 export class I7yClient {
   private generation = 0;
   private requests = new Set<AbortController>();
-  constructor(private state: () => ClientState, private fetcher: typeof fetch) {}
+  constructor(private state: () => ClientState, private fetcher: typeof fetch, private current: () => boolean = () => true) {}
 
   invalidate() {
     this.generation++;
@@ -66,6 +66,7 @@ export class I7yClient {
   }
 
   async request<T>(path: string, options: { method?: string; body?: unknown; query?: Record<string, unknown>; public?: boolean; serverUrl?: string; signal?: AbortSignal } = {}): Promise<T> {
+    if (!this.current()) throw new ContextChangedError();
     const version = this.generation;
     const context = this.state();
     const origin = options.serverUrl ?? context.serverUrl;
@@ -92,13 +93,13 @@ export class I7yClient {
         },
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
       });
-      if (version !== this.generation) throw new ContextChangedError();
+      if (version !== this.generation || !this.current()) throw new ContextChangedError();
       const data = response.status === 204 ? null : await response.json().catch((cause: unknown) => {
-        if (version !== this.generation) throw new ContextChangedError();
+        if (version !== this.generation || !this.current()) throw new ContextChangedError();
         if (cause instanceof SyntaxError) throw new InvalidResponseError(response.status);
         throw cause;
       });
-      if (version !== this.generation) throw new ContextChangedError();
+      if (version !== this.generation || !this.current()) throw new ContextChangedError();
       if (!response.ok) throw new ApiError(response.status, typeof data?.message === 'string' ? data.message : 'Request failed');
       return data as T;
     } finally {
@@ -117,6 +118,8 @@ export class I7yClient {
   }
   organizations() { return this.request<{ items: Organization[]; global_admin: boolean }>('/api/i7y/organizations'); }
   incidents(query: Record<string, unknown> = {}) { return this.request<Page<Incident>>('/api/i7y/alerts/v1/incidents', { query }); }
+  inbox(query: Record<string, unknown> = {}) { return this.request<Page<Incident>>('/api/i7y/alerts/v1/inbox', { query }); }
+  inboxNotifications(cursor = '0') { return this.request<{ items: { incident_id: string; organization_id: string }[]; cursor: string; open_count: number }>('/api/i7y/alerts/v1/inbox/notification-events', { query: { cursor, limit: 100 } }); }
   incident(id: string) { return this.request<Incident>('/api/i7y/alerts/v1/incidents/' + encodeURIComponent(id)); }
   claim(id: string, claim_until: string, version: number) { return this.request<Incident>('/api/i7y/alerts/v1/incidents/' + encodeURIComponent(id) + '/claim', { method: 'POST', body: { claim_until, version } }); }
   resolve(id: string, version: number) { return this.request<Incident>('/api/i7y/alerts/v1/incidents/' + encodeURIComponent(id) + '/resolve', { method: 'POST', body: { version } }); }

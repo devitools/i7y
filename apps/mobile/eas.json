@@ -18,7 +18,7 @@
       "autoIncrement": true,
       "env": {
         "I7Y_BUILD_VARIANT": "production",
-        "EXPO_PUBLIC_I7Y_PUSH_GATEWAY_URL": "https://i7y-push.disk.ninja"
+        "EXPO_PUBLIC_I7Y_PUSH_GATEWAY_URL": "https://push.devi.tools"
       },
       "android": {
         "buildType": "app-bundle"
@@ -50,7 +50,7 @@
       },
       "env": {
         "I7Y_BUILD_VARIANT": "production",
-        "EXPO_PUBLIC_I7Y_PUSH_GATEWAY_URL": "https://i7y-push.disk.ninja"
+        "EXPO_PUBLIC_I7Y_PUSH_GATEWAY_URL": "https://push.devi.tools"
       }
     }
   },

@@ -5,7 +5,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   const secureTransport = production || process.env.I7Y_BUILD_VARIANT === 'device-development';
   return {
     ...config,
-    name: 'i7y', slug: 'i7y', owner: 'wilcorrea', version: '0.1.0',
+    name: 'i7y', slug: 'i7y', owner: 'wilcorrea', version: '0.2.0',
     scheme: 'com.devitools.i7y.mobile', orientation: 'default', userInterfaceStyle: 'automatic',
     icon: './assets/icon.png',
     ios: {
@@ -33,7 +33,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     extra: {
       ...config.extra,
       buildVariant: process.env.I7Y_BUILD_VARIANT === 'simulator' ? 'simulator' : production ? 'production' : 'development',
-      pushGatewayUrl: process.env.EXPO_PUBLIC_I7Y_PUSH_GATEWAY_URL ?? '',
+      pushGatewayUrl: process.env.EXPO_PUBLIC_I7Y_PUSH_GATEWAY_URL ?? 'https://push.devi.tools',
       pushEnvironment: production ? 'production' : 'sandbox',
     },
   };

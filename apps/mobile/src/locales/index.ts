@@ -2,6 +2,12 @@ import { getLocales } from 'expo-localization';
 import { useSyncExternalStore } from 'react';
 
 const en = {
+  connections: 'Connections', manageConnections: 'Manage connections', addConnection: 'Add connection',
+  connectionsBody: 'Stay signed in to multiple servers. Incidents include every authorized organization across your connections.',
+  connectionName: 'Connection name', saveName: 'Save name', selectConnection: 'Use for settings', selectedConnection: 'Selected for settings',
+  signedOut: 'Signed out', connectionUnavailable: 'Connection unavailable. Other connections continue to work.',
+  removeConnection: 'Remove connection', removeConnectionBody: 'Remove this server and its session from this device? Other connections stay signed in.', remove: 'Remove',
+  allOrganizations: 'All authorized organizations', partialInbox: 'Some connections could not be loaded. Available incidents are shown. Retry to refresh all connections.',
   support: 'Support', privacyPolicy: 'Privacy policy', linkError: 'Could not open the page. Please try again.',
   incidents: 'Incidents', settings: 'Settings', connect: 'Connect', incident: 'Incident',
   signIn: 'Sign in', backendUrl: 'Backend URL', savedServer: 'Saved on this device. Use the address of your i7y installation.', language: 'Language', toggleTheme: 'Toggle theme', unsupportedServer: 'This server does not support the mobile app yet. Update the server to enable access.',
@@ -42,6 +48,12 @@ const en = {
 export type MessageKey = keyof typeof en;
 type Messages = Record<MessageKey, string>;
 const pt: Messages = {
+  connections: 'Conexões', manageConnections: 'Gerenciar conexões', addConnection: 'Adicionar conexão',
+  connectionsBody: 'Mantenha a sessão em vários servidores. Os incidentes incluem todas as organizações autorizadas de suas conexões.',
+  connectionName: 'Nome da conexão', saveName: 'Salvar nome', selectConnection: 'Usar nos ajustes', selectedConnection: 'Selecionada nos ajustes',
+  signedOut: 'Sessão encerrada', connectionUnavailable: 'Conexão indisponível. As outras conexões continuam funcionando.',
+  removeConnection: 'Remover conexão', removeConnectionBody: 'Remover este servidor e sua sessão deste dispositivo? As outras conexões continuam conectadas.', remove: 'Remover',
+  allOrganizations: 'Todas as organizações autorizadas', partialInbox: 'Não foi possível carregar algumas conexões. Os incidentes disponíveis são exibidos. Tente atualizar todas as conexões.',
   support: 'Suporte', privacyPolicy: 'Política de privacidade', linkError: 'Não foi possível abrir a página. Tente novamente.',
   incidents: 'Incidentes', settings: 'Ajustes', connect: 'Conectar', incident: 'Incidente',
   signIn: 'Entrar', backendUrl: 'URL do backend', savedServer: 'Salvo neste dispositivo. Use o endereço da sua instalação do i7y.', language: 'Idioma', toggleTheme: 'Alternar tema', unsupportedServer: 'Este servidor ainda não oferece suporte ao app. Atualize o servidor para habilitar o acesso.',
@@ -80,6 +92,12 @@ const pt: Messages = {
   unavailable: 'Indisponível', noIncident: 'Incidente indisponível', noIncidentBody: 'Ele pode ter sido removido ou sua organização pode não ter mais acesso.',
 };
 const uk: Messages = {
+  connections: 'Підключення', manageConnections: 'Керувати підключеннями', addConnection: 'Додати підключення',
+  connectionsBody: 'Працюйте з кількома серверами одночасно. Стрічка містить інциденти всіх доступних організацій з усіх підключень.',
+  connectionName: 'Назва підключення', saveName: 'Зберегти назву', selectConnection: 'Вибрати для налаштувань', selectedConnection: 'Вибрано для налаштувань',
+  signedOut: 'Вхід не виконано', connectionUnavailable: 'Підключення недоступне. Інші підключення продовжують працювати.',
+  removeConnection: 'Видалити підключення', removeConnectionBody: 'Видалити цей сервер і його сеанс із пристрою? Інші підключення залишаться активними.', remove: 'Видалити',
+  allOrganizations: 'Усі доступні організації', partialInbox: 'Не вдалося завантажити деякі підключення. Показано доступні інциденти. Повторіть оновлення всіх підключень.',
   support: 'Підтримка', privacyPolicy: 'Політика конфіденційності', linkError: 'Не вдалося відкрити сторінку. Спробуйте ще раз.',
   incidents: 'Інциденти', settings: 'Налаштування', connect: 'Підключити', incident: 'Інцидент',
   signIn: 'Увійти', backendUrl: 'Адреса сервера', savedServer: 'Збережено на цьому пристрої. Використовуйте адресу вашої інсталяції i7y.', language: 'Мова', toggleTheme: 'Змінити тему', unsupportedServer: 'Цей сервер ще не підтримує мобільний застосунок. Оновіть сервер, щоб увімкнути доступ.',

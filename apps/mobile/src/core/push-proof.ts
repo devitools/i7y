@@ -1,3 +1,5 @@
+import { canonicalGateway } from './push-config';
+
 export interface PendingPushProof {
   registrationId: string;
   expiresAt: string;
@@ -6,6 +8,10 @@ export interface PendingPushProof {
   connectionId: string;
   serverUrl: string;
   instanceId: string;
+  deviceKey?: string;
+  deviceId?: string;
+  environment?: string;
+  version?: 1 | 2;
 }
 export function registrationProof(data: Record<string, unknown> | undefined) {
   if (data?.kind !== 'registration_challenge' || typeof data.registration_id !== 'string' || typeof data.nonce !== 'string') return null;
@@ -14,5 +20,5 @@ export function registrationProof(data: Record<string, unknown> | undefined) {
 }
 export function matchesPendingProof(pending: PendingPushProof, registrationId: string, context: { connectionId: string; serverUrl: string; instanceId: string }, gatewayUrl: string | null, now = Date.now()) {
   const expires = Date.parse(pending.expiresAt);
-  return pending.registrationId === registrationId && pending.connectionId === context.connectionId && pending.serverUrl === context.serverUrl && pending.instanceId === context.instanceId && pending.gatewayUrl === gatewayUrl && Number.isFinite(expires) && expires > now;
+  return pending.registrationId === registrationId && pending.connectionId === context.connectionId && pending.serverUrl === context.serverUrl && pending.instanceId === context.instanceId && gatewayUrl !== null && canonicalGateway(pending.gatewayUrl) === canonicalGateway(gatewayUrl) && Number.isFinite(expires) && expires > now;
 }

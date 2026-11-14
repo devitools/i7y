@@ -12,14 +12,13 @@ void SplashScreen.preventAutoHideAsync();
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, staleTime: 15000, refetchOnWindowFocus: true }, mutations: { retry: false } } });
 
 function Navigation() {
-  const { ready, session } = useI7y();
+  const { ready, hasSessions } = useI7y();
   useEffect(() => { if (ready) void SplashScreen.hideAsync(); }, [ready]);
   if (!ready) return null;
   return <Stack>
-    <Stack.Protected guard={!session}>
-      <Stack.Screen name="connect" options={{ title: 'i7y', headerShown: false }} />
-    </Stack.Protected>
-    <Stack.Protected guard={!!session}>
+    <Stack.Screen name="connect" options={{ title: 'i7y', headerShown: false }} />
+    <Stack.Screen name="connections" options={{ title: t('connections') }} />
+    <Stack.Protected guard={hasSessions}>
       <Stack.Screen name="(tabs)" options={{ title: t('incidents'), headerShown: false }} />
       <Stack.Screen name="incident/[id]" options={{ title: t('incident') }} />
     </Stack.Protected>

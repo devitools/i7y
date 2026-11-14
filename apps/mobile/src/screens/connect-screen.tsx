@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { AppHeader } from '@/components/app-header';
 import { AuthorizationCancelledError, UnsupportedServerError, normalizeServerUrl } from '@/core/client';
 import { allowLocalServers } from '@/core/config';
@@ -11,7 +12,9 @@ import { useTheme } from '@/theme/colors';
 export default function ConnectScreen() {
   const c = useTheme();
   const state = useI7y();
-  const [url, setUrl] = useState(state.serverUrl);
+  const { add } = useLocalSearchParams<{ add?: string }>();
+  const router = useRouter();
+  const [url, setUrl] = useState(add ? '' : state.serverUrl);
   const [pending, setPending] = useState(false);
   const [focused, setFocused] = useState(false);
   const [error, setError] = useState('');
@@ -46,6 +49,8 @@ export default function ConnectScreen() {
             <Text style={{ color: '#ffffff', fontSize: 14, fontWeight: '500' }}>{t(busy ? 'working' : 'browserLogin')}</Text>
           </Pressable>
           {!!state.authCode && <View style={{ gap: 8 }} accessibilityLiveRegion="polite"><Text style={{ color: c.muted, fontSize: 14 }}>{t('waitingLogin')}</Text><Text selectable style={{ color: c.text, fontSize: 24, fontWeight: '600', letterSpacing: 3 }}>{state.authCode}</Text><Text style={{ color: c.muted, fontSize: 12, lineHeight: 17 }}>{t('compareCode')}</Text></View>}
+          {state.connections.length > 0 && <Pressable accessibilityRole="button" onPress={() => router.push('/connections')} style={{ minHeight: 44, justifyContent: 'center' }}><Text style={{ color: c.brand, fontSize: 16 }}>{t('manageConnections')}</Text></Pressable>}
+          {state.hasSessions && <Pressable accessibilityRole="button" onPress={() => router.replace('/(tabs)')} style={{ minHeight: 44, justifyContent: 'center' }}><Text style={{ color: c.brand, fontSize: 16 }}>{t('incidents')}</Text></Pressable>}
           {!!error && <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={{ color: c.critical, fontSize: 14, lineHeight: 20 }}>{error}</Text>}
         </View>
       </ScrollView>

@@ -3,6 +3,7 @@ export interface ServerInfo {
   protocol_version: number;
   capabilities: string[];
   push_gateway_url?: string;
+  push_gateway_urls?: string[];
 }
 
 export interface User {
@@ -28,6 +29,11 @@ export interface Organization {
 
 export interface Incident {
   id: string;
+  organization?: string;
+  organization_id?: string;
+  organization_name?: string;
+  organization_role?: Organization['role'];
+  created?: string;
   title: string;
   severity: 'info' | 'warning' | 'critical';
   status: 'open' | 'resolved';
@@ -62,6 +68,30 @@ export interface PushRegistration {
   connectionId: string;
   nativeToken: string;
   backendDeviceId?: string;
+  version?: 1 | 2;
+  deviceKey?: string;
+}
+
+export interface ConnectionProfile {
+  id: string;
+  name: string;
+  serverUrl: string;
+  instanceId: string;
+  organizationId?: string;
+}
+
+export interface ConnectionPreferences {
+  version: 2;
+  activeId: string | null;
+  profiles: ConnectionProfile[];
+}
+
+export interface SourcedIncident extends Incident {
+  connectionId: string;
+  loginId: string;
+  organizationId: string;
+  connectionName: string;
+  userId: string;
 }
 
 export interface IncidentNotification {
