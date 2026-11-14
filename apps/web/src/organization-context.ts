@@ -9,6 +9,7 @@ export function createOrganizationTransport(getOrganization: () => string | null
       const version=generation,organization=getOrganization(),token=getToken(),requestFetcher=captureFetcher?captureFetcher():fetcher
       options.headers={...options.headers,...(organization?{'X-I7y-Organization':organization}:{})}
       options.fetch=async(input,init)=>{
+        assertCurrent(version,token)
         const response=await requestFetcher(input,init)
         assertCurrent(version,token)
         responses.set(response,{version,token})

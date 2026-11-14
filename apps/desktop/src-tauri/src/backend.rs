@@ -130,6 +130,7 @@ fn contains_session_credential(value: &serde_json::Value) -> bool {
 }
 
 fn public_api_body(
+    public_generation: u64,
     backend: &Url,
     target: &Url,
     status: u16,
@@ -158,7 +159,7 @@ fn public_api_body(
             token: value["token"].as_str().unwrap().into(),
             record: value["record"].clone(),
         }
-        .public();
+        .public(public_generation);
         store(&mut value)?;
         if value != public {
             return Err("Authentication credential was not isolated".into());
@@ -172,6 +173,36 @@ fn public_api_body(
         return Err("Invalid authentication response".into());
     }
     Ok(body)
+}
+
+fn request_headers(mut request: reqwest::RequestBuilder, headers: HashMap<String, String>, session: Option<&crate::session::Session>, generation: u64) -> Result<reqwest::RequestBuilder, String> {
+    for (key, value) in headers {
+        if ![
+            "authorization",
+            "content-type",
+            "accept",
+            "x-i7y-organization",
+            "accept-language",
+            "x-i7y-expected-revision",
+        ]
+        .contains(&key.to_lowercase().as_str())
+        {
+            return Err("Unsupported API header".into());
+        }
+        if key.eq_ignore_ascii_case("authorization") {
+            let marker = value.trim();
+            let marker = match marker.split_once(' ') {Some((scheme, token)) if scheme.eq_ignore_ascii_case("bearer") => token.trim(),_ => marker};
+            if let Some(session) = session {
+                if session.public(generation)["token"].as_str() != Some(marker) {return Err("Session context changed".into())}
+                request = request.bearer_auth(&session.token);
+            } else if !marker.is_empty() {
+                return Err("Sign in required".into());
+            }
+        } else {
+            request = request.header(key, value);
+        }
+    }
+    Ok(request)
 }
 
 #[tauri::command]
@@ -192,31 +223,7 @@ pub async fn backend_request(
     }
     let method =
         reqwest::Method::from_bytes(method.as_bytes()).map_err(|_| "Invalid API method")?;
-    let mut request = state.client.request(method, target.clone());
-    for (key, value) in headers {
-        if ![
-            "authorization",
-            "content-type",
-            "accept",
-            "x-i7y-organization",
-            "accept-language",
-            "x-i7y-expected-revision",
-        ]
-        .contains(&key.to_lowercase().as_str())
-        {
-            return Err("Unsupported API header".into());
-        }
-        if key.eq_ignore_ascii_case("authorization") {
-            let token = session.as_ref().map(|session| session.token.clone());
-            if let Some(token) = token {
-                request = request.bearer_auth(token);
-            } else if !value.is_empty() {
-                return Err("Sign in required".into());
-            }
-        } else {
-            request = request.header(key, value);
-        }
-    }
+    let mut request = request_headers(state.client.request(method, target.clone()), headers, session.as_ref(), generation)?;
     if let Some(body) = body {
         request = request.body(body)
     }
@@ -244,7 +251,7 @@ pub async fn backend_request(
     }
     let body = String::from_utf8(bytes).map_err(|_| "Unsupported API response")?;
     state.connections.lock().map_err(|_| "Connections unavailable")?.current(&connection_id, generation)?;
-    let body = public_api_body(&backend, &target, status, body, |value| {
+    let body = public_api_body(generation + 1,&backend, &target, status, body, |value| {
         crate::session::store(&app, &connection_id, value, generation)
     })?;
     if status == 401 {
@@ -274,8 +281,71 @@ mod tests {
             token: value["token"].as_str().unwrap().into(),
             record: value["record"].clone(),
         }
-        .public();
+        .public(1);
         Ok(())
+    }
+
+    #[test]
+    fn expected_revision_reaches_the_backend_and_unapproved_headers_never_dispatch() {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let capture = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut lines = Vec::new();
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {break}
+                lines.push(line.trim().to_lowercase());
+            }
+            stream.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+            lines
+        });
+        let backend = normalize_backend(&format!("http://{address}/")).unwrap();
+        let target = api_target(&backend, &format!("http://{address}/api/i7y/alerts/v2/rules/memory")).unwrap();
+        let client = client().unwrap();
+        for denied in ["X-Api-Key", "Cookie", "Host", "X-Forwarded-Authorization"] {
+            assert!(request_headers(client.put(target.clone()), HashMap::from([(denied.into(),"blocked".into())]), None, 0).is_err());
+        }
+        let session = crate::session::Session {token:"native-only-secret".into(),record:serde_json::json!({"id":"user"})};
+        let request = request_headers(client.put(target), HashMap::from([
+            ("X-I7y-Expected-Revision".into(),"17".into()),
+            ("X-I7y-Organization".into(),"organization-a".into()),
+            ("Authorization".into(),"bEaReR native..session-g4".into()),
+        ]), Some(&session), 4).unwrap();
+        let response = tauri::async_runtime::block_on(async {request.send().await}).unwrap();
+        assert_eq!(response.status().as_u16(),204);
+        let headers = capture.join().unwrap();
+        assert!(headers.iter().any(|line|line == "x-i7y-expected-revision: 17"));
+        assert!(headers.iter().any(|line|line == "x-i7y-organization: organization-a"));
+        assert!(headers.iter().any(|line|line == "authorization: bearer native-only-secret"));
+        assert!(!headers.iter().any(|line|line.contains("blocked") || line.contains("native.expiry.session")));
+    }
+
+    #[test]
+    fn stale_or_foreign_authorization_never_selects_a_current_native_credential() {
+        let client = client().unwrap();
+        let target = "https://example.test/api/i7y/alerts/v1/incidents/same/resolve";
+        let session = crate::session::Session {token:"header.expiry.same-backend-jwt".into(),record:serde_json::json!({"id":"same-user"})};
+        let mut registry = crate::connections::decode(None,Some(&normalize_backend("https://example.test/").unwrap())).unwrap();
+        let id = registry.selected.clone().unwrap();
+        registry.set_session(&id,0,session.clone()).unwrap();
+        let first = session.public(1)["token"].as_str().unwrap().to_owned();
+        registry.clear(&id).unwrap();registry.set_session(&id,2,session.clone()).unwrap();
+        let (_, generation, active) = registry.snapshot(&id).unwrap();
+        assert_eq!(generation,3);
+        for marker in [first,"Bearer native.expiry.session-g1".into(),"native.expiry.session-g99".into(),"native.other.session-g3".into(),"header.expiry.same-backend-jwt".into()] {
+            assert!(request_headers(client.post(target),HashMap::from([("Authorization".into(),marker)]),active.as_ref(),generation).is_err());
+        }
+        for prefix in ["", "Bearer ", "bEaReR "] {
+            let current = format!("{prefix}{}",session.public(generation)["token"].as_str().unwrap());
+            let request = request_headers(client.post(target),HashMap::from([("Authorization".into(),current)]),active.as_ref(),generation).unwrap().build().unwrap();
+            assert_eq!(request.headers()["authorization"],"Bearer header.expiry.same-backend-jwt");
+        }
+        assert!(request_headers(client.post(target),HashMap::from([("Authorization".into(),"native.expiry.session-g3".into())]),None,generation).is_err());
     }
 
     #[test]
@@ -297,14 +367,14 @@ mod tests {
                 assert_eq!(target.as_str(), input);
                 assert!(target_is_auth(&backend, &target).unwrap(), "{input}");
                 let mut stored = false;
-                let body = public_api_body(&backend, &target, 200, session_response(), |value| {
+                let body = public_api_body(1,&backend, &target, 200, session_response(), |value| {
                     stored = true;
                     isolate_session(value)
                 })
                 .unwrap();
                 assert!(stored);
                 let value: serde_json::Value = serde_json::from_str(&body).unwrap();
-                assert_eq!(value["token"], "native.expiry.session");
+                assert_eq!(value["token"], "native.expiry.session-g1");
                 assert!(!body.contains("private-signature"));
             }
         }
@@ -326,7 +396,7 @@ mod tests {
             assert!(!target_is_auth(&backend, &target).unwrap(), "{input}");
             let body =
                 serde_json::json!({"id":"generated","token":"i7y_explicit-api-token"}).to_string();
-            let visible = public_api_body(&backend, &target, 201, body.clone(), |_| {
+            let visible = public_api_body(1,&backend, &target, 201, body.clone(), |_| {
                 panic!("API token must not replace the native session")
             })
             .unwrap();
@@ -339,7 +409,7 @@ mod tests {
         .unwrap();
         let methods = r#"{"password":{"enabled":true}}"#.to_owned();
         assert_eq!(
-            public_api_body(&backend, &target, 200, methods.clone(), |_| panic!(
+            public_api_body(1,&backend, &target, 200, methods.clone(), |_| panic!(
                 "No session to store"
             ))
             .unwrap(),
@@ -356,7 +426,7 @@ mod tests {
             format!(r#"{{"data":{}}}"#, session_response()),
             format!("[{}]", session_response()),
         ] {
-            assert!(public_api_body(&backend, &ordinary, 200, body, |_| panic!(
+            assert!(public_api_body(1,&backend, &ordinary, 200, body, |_| panic!(
                 "Unexpected session must not be stored"
             ))
             .is_err());
@@ -366,20 +436,20 @@ mod tests {
             "https://example.test/api/collections/users/%61uth-refresh",
         )
         .unwrap();
-        assert!(public_api_body(&backend, &auth, 200, session_response(), |_| Ok(())).is_err());
+        assert!(public_api_body(1,&backend, &auth, 200, session_response(), |_| Ok(())).is_err());
         assert!(
-            public_api_body(&backend, &auth, 200, session_response(), |_| Err(
+            public_api_body(1,&backend, &auth, 200, session_response(), |_| Err(
                 "Persistence failed".into()
             ))
             .is_err()
         );
         assert!(
-            public_api_body(&backend, &auth, 400, session_response(), |_| panic!(
+            public_api_body(1,&backend, &auth, 400, session_response(), |_| panic!(
                 "Failed response must not be stored"
             ))
             .is_err()
         );
-        assert!(public_api_body(
+        assert!(public_api_body(1,
             &backend,
             &auth,
             200,
@@ -387,7 +457,7 @@ mod tests {
             isolate_session
         )
         .is_err());
-        assert!(public_api_body(
+        assert!(public_api_body(1,
             &backend,
             &auth,
             400,
@@ -396,13 +466,13 @@ mod tests {
         )
         .is_err());
         assert!(
-            public_api_body(&backend, &auth, 200, "invalid JSON".into(), isolate_session).is_err()
+            public_api_body(1,&backend, &auth, 200, "invalid JSON".into(), isolate_session).is_err()
         );
         let nested = format!(
             r#"{{"token":"header.expiry.private-signature","record":{{"collectionName":"users","nested":{}}}}}"#,
             session_response()
         );
-        assert!(public_api_body(&backend, &auth, 200, nested, isolate_session).is_err());
+        assert!(public_api_body(1,&backend, &auth, 200, nested, isolate_session).is_err());
     }
 
     #[test]

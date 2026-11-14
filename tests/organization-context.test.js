@@ -41,3 +41,16 @@ test('organization forms and member and invitation lists have independent reload
   assert.deepEqual(readRoute('#/organizations/invitations/new'),{view:'organizations',section:'invitations',action:'new',id:null})
   assert.deepEqual(readRoute('#/organizations/invitations/inviteid/revoke'),{view:'organizations',section:'invitations',action:'revoke',id:'inviteid'})
 })
+
+
+test('queued SDK dispatch cannot send a mutation after its organization or account changes', async()=>{
+  for(const change of ['organization','account']) {
+    let organization='a',token='account-a',sent=0
+    const transport=createOrganizationTransport(()=>organization,async()=>{sent++;return {}},()=>token)
+    const prepared=transport.beforeSend('/api/integrations/source/transfer',{method:'POST'})
+    if(change==='organization'){organization='b';transport.invalidate()}
+    else token='account-b'
+    await assert.rejects(prepared.options.fetch('/api/integrations/source/transfer',{method:'POST'}),/context changed/)
+    assert.equal(sent,0)
+  }
+})

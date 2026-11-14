@@ -8,9 +8,9 @@ pub struct Session {
     pub record: Value,
 }
 impl Session {
-    pub fn public(&self) -> Value {
+    pub fn public(&self, generation: u64) -> Value {
         let payload = self.token.split('.').nth(1).unwrap_or("");
-        json!({"token":format!("native.{payload}.session"),"record":self.record})
+        json!({"token":format!("native.{payload}.session-g{generation}"),"record":self.record})
     }
 }
 pub fn account(app:&tauri::AppHandle,backend: &str) -> String {
@@ -50,7 +50,7 @@ pub fn store(
         inner.backend = backend.to_string();
         inner.session = Some(session.clone());
     }
-    *value = session.public();
+    *value = session.public(expected_generation + 1);
     Ok(())
 }
 #[tauri::command]
@@ -193,13 +193,25 @@ mod tests {
         assert!(inner.connections.get("b-approval").unwrap().authorized);
     }
     #[test]
+    fn identical_jwts_receive_distinct_public_login_proofs_without_changing_expiry_payload() {
+        let session = Session {token:"header.eyJleHAiOjIwMDAwMDAwMDB9.private-signature".into(),record:json!({"id":"same-user"})};
+        let first = session.public(1);let replacement = session.public(3);
+        assert_ne!(first["token"],replacement["token"]);
+        for value in [first,replacement] {
+            let token = value["token"].as_str().unwrap();
+            assert_eq!(token.split('.').count(),3);
+            assert_eq!(token.split('.').nth(1),session.token.split('.').nth(1));
+            assert!(!token.contains("private-signature"));
+        }
+    }
+    #[test]
     fn frontend_marker_never_contains_a_usable_backend_token() {
         let session = Session {
             token: "header.expiry.signature-secret".into(),
             record: json!({"id":"human"}),
         };
-        let view = session.public();
-        assert_eq!(view["token"], "native.expiry.session");
+        let view = session.public(7);
+        assert_eq!(view["token"], "native.expiry.session-g7");
         assert!(!view.to_string().contains("signature-secret"));
         assert_eq!(view["record"]["id"], "human");
     }

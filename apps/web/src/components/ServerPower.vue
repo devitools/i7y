@@ -3,56 +3,76 @@ import {computed,onUnmounted,ref,watch} from 'vue'
 import {useQuasar} from 'quasar'
 import {invoke} from '@tauri-apps/api/core'
 import {listen,type UnlistenFn} from '@tauri-apps/api/event'
-import {activeOrganization} from '../api'
+import {activeOrganization,activeConnectionId,connectionRevision} from '../api'
 import {desktopRuntime} from '../desktop-backend'
-import {serverPowerApi} from '../server-power-api'
+import {captureServerPowerSource,createServerPowerApi,powerProgressMatches,type PowerNativeContext,type ServerPowerSource} from '../server-power-api'
 import {t,locale} from '../i18n'
 const props=defineProps<{serverId:string}>()
-const q=useQuasar(),data=ref<any>(null),error=ref(''),busy=ref(false),saving=ref(false),loading=ref(false),stage=ref(''),request=ref(''),formVersion=ref(0)
-const local=ref({supported:false,identity_file:'',proxy_available:false}),identity=ref(''),viaHost=ref(false),showSettings=ref(false)
+const q=useQuasar(),data=ref<any>(null),loaded=ref<{server:string;source:string}|null>(null),error=ref(''),busy=ref(false),saving=ref(false),loading=ref(false),stage=ref(''),request=ref(''),formVersion=ref(0)
+interface LocalSettings {supported:boolean;identity_file:string;proxy_available:boolean;context?:PowerNativeContext}
+const local=ref<LocalSettings>({supported:false,identity_file:'',proxy_available:false}),identity=ref(''),viaHost=ref(false),showSettings=ref(false)
 const opAccount=ref(localStorage.getItem('i7y.power.opAccount')||'')
 const form=ref({service_id:'',vm_id:'',boot_port:2222,boot_host_key:'',luks_uuid:''})
-let generation=0,timer:ReturnType<typeof setInterval>|undefined,refreshing=false,unlisten:UnlistenFn|undefined
+const source=computed(()=>{connectionRevision.value;activeConnectionId.value;activeOrganization.value;try{return captureServerPowerSource()}catch{return null}})
+const sourceIdentity=computed(()=>source.value?JSON.stringify(source.value.identity):'')
+let generation=0,timer:ReturnType<typeof setInterval>|undefined,refreshing=false,unlisten:UnlistenFn|undefined,dialog:{hide:()=>unknown}|undefined
+let operationContext:PowerNativeContext|undefined
 const jobs=computed(()=>data.value?.jobs||[]),latest=computed(()=>jobs.value[0]),blockingJob=computed(()=>jobs.value.find((j:any)=>['running','unknown'].includes(j.status))),blocked=computed(()=>!!blockingJob.value),displayed=computed(()=>blockingJob.value||latest.value)
 const consoleHref=computed(()=>data.value?.profile?'https://my.snel.com/clientarea/services/cloudvps/'+encodeURIComponent(data.value.profile.service_id)+'/':null)
 const date=(value:string)=>value?new Date(value.replace(' ','T')).toLocaleString(locale.value):'—'
-function failure(cause:any){return typeof cause==='string'&&/^[a-z_]+$/.test(cause)?t('power.error.'+cause):cause?.response?.message||t('power.failed')}
+function failure(cause:any){const reason=typeof cause==='string'?cause:cause?.message;return typeof reason==='string'&&/^[a-z_]+$/.test(reason)?t('power.error.'+reason):cause?.response?.message||t('power.failed')}
 async function refresh(initial=false){
-  if(refreshing||!props.serverId||!activeOrganization.value)return
+  const selected=source.value,server=props.serverId
+  if(refreshing||!server||!selected)return
   const current=generation;refreshing=true
   if(initial)loading.value=true
-  try{const next=await serverPowerApi.get(props.serverId);if(current!==generation)return;data.value=next;error.value='';if(initial){formVersion.value=next.profile?.version||0;form.value={service_id:next.profile?.service_id||'',vm_id:next.profile?.vm_id||'',boot_port:next.profile?.boot_port||2222,boot_host_key:next.profile?.boot_host_key||'',luks_uuid:next.profile?.luks_uuid||''}}}
+  try{
+    const next=await createServerPowerApi(selected).get(server)
+    const settings=desktopRuntime?await invoke<LocalSettings>('server_power_local_settings',{expectedSource:selected.nativeSource}):null
+    if(current!==generation||!selected.current())return
+    data.value=next;loaded.value={server,source:JSON.stringify(selected.identity)};error.value=''
+    if(settings){local.value=settings;if(initial)identity.value=settings.identity_file}
+    if(initial){formVersion.value=next.profile?.version||0;form.value={service_id:next.profile?.service_id||'',vm_id:next.profile?.vm_id||'',boot_port:next.profile?.boot_port||2222,boot_host_key:next.profile?.boot_host_key||'',luks_uuid:next.profile?.luks_uuid||''}}
+  }
   catch(cause:any){if(current===generation)error.value=cause?.status===404?t('power.backendUnavailable'):failure(cause)}
   finally{if(current===generation){loading.value=false;refreshing=false}}
 }
-watch(()=>[props.serverId,activeOrganization.value],async()=>{
-  ++generation;data.value=null;error.value='';busy.value=false;stage.value='';request.value='';refreshing=false;formVersion.value=0;showSettings.value=false
+watch(()=>[props.serverId,sourceIdentity.value],async()=>{
+  ++generation;dialog?.hide();dialog=undefined;data.value=null;loaded.value=null;error.value='';busy.value=false;saving.value=false;loading.value=false;stage.value='';request.value='';refreshing=false;formVersion.value=0;showSettings.value=false;operationContext=undefined
+  local.value={supported:false,identity_file:'',proxy_available:false};identity.value='';viaHost.value=false
   if(timer)clearInterval(timer);if(unlisten){unlisten();unlisten=undefined}
-  const current=generation
-  if(desktopRuntime){try{const settings=await invoke<typeof local.value>('server_power_local_settings');if(current===generation){local.value=settings;identity.value=settings.identity_file}}catch{if(current===generation)local.value={supported:false,identity_file:'',proxy_available:false}}
-    const stop=await listen<{server_id:string;request_id:string;stage:string}>('server-power-progress',event=>{if(current===generation&&event.payload.server_id===props.serverId&&event.payload.request_id===request.value)stage.value=event.payload.stage})
+  const current=generation,selected=source.value
+  if(!selected)return
+  if(desktopRuntime){
+    const stop=await listen<{server_id:string;request_id:string;stage:string;context:PowerNativeContext}>('server-power-progress',event=>{if(current===generation&&selected.current()&&powerProgressMatches(operationContext,props.serverId,request.value,event.payload))stage.value=event.payload.stage})
     if(current===generation)unlisten=stop;else stop()
   }
   if(current!==generation)return
   await refresh(true)
   if(current===generation)timer=setInterval(()=>{if(!busy.value)void refresh()},5000)
 },{immediate:true})
-onUnmounted(()=>{++generation;if(timer)clearInterval(timer);unlisten?.()})
-async function execute(action:'inspect'|'start'|'shutdown'){
-  const current=generation,organization=activeOrganization.value,server=props.serverId
-  if(busy.value||!organization||!data.value?.profile)return
-  if(action!=='inspect'&&blocked.value)return
-  busy.value=true;error.value='';stage.value='checking_provider';request.value=crypto.randomUUID()
-  try{localStorage.setItem('i7y.power.opAccount',opAccount.value.trim());await invoke('server_power_run',{organization,serverId:server,action,requestId:request.value,version:data.value.profile.version,identityFile:identity.value,viaAutomationHost:viaHost.value,opAccount:opAccount.value.trim()});if(current===generation)await refresh()}
-  catch(cause){if(current===generation){const message=failure(cause);await refresh();if(current===generation)error.value=message}}
-  finally{if(current===generation){busy.value=false;stage.value=''}}
+onUnmounted(()=>{++generation;dialog?.hide();if(timer)clearInterval(timer);unlisten?.()})
+interface Execution {generation:number;source:ServerPowerSource;server:string;version:number;context:PowerNativeContext;identityFile:string;viaAutomationHost:boolean;opAccount:string}
+function execution():Execution|null {
+  const selected=source.value
+  if(!selected?.current()||loaded.value?.server!==props.serverId||loaded.value?.source!==JSON.stringify(selected.identity)||!local.value.context||!data.value?.profile||!data.value.can_edit)return null
+  return {generation,source:selected,server:props.serverId,version:data.value.profile.version,context:JSON.parse(JSON.stringify(local.value.context)),identityFile:identity.value,viaAutomationHost:viaHost.value,opAccount:opAccount.value.trim()}
+}
+async function execute(action:'inspect'|'start'|'shutdown',expected=execution()){
+  if(!expected||expected.generation!==generation||expected.server!==props.serverId||!expected.source.current()||busy.value||action!=='inspect'&&blocked.value)return
+  const current=expected.generation
+  busy.value=true;error.value='';stage.value='checking_provider';request.value=crypto.randomUUID();operationContext=expected.context
+  try{localStorage.setItem('i7y.power.opAccount',expected.opAccount);await invoke('server_power_run',{organization:expected.source.identity.organization,serverId:expected.server,action,requestId:request.value,version:expected.version,identityFile:expected.identityFile,viaAutomationHost:expected.viaAutomationHost,opAccount:expected.opAccount,expectedContext:expected.context});if(current===generation&&expected.source.current())await refresh()}
+  catch(cause){if(current===generation&&expected.source.current()){const message=failure(cause);await refresh();if(current===generation)error.value=message}}
+  finally{if(current===generation){busy.value=false;stage.value='';operationContext=undefined}}
 }
 function confirm(action:'start'|'shutdown'){
-  const current=generation
-  q.dialog({title:t(action==='start'?'power.start':'power.stop'),message:t(action==='start'?'power.confirmStart':'power.confirmStop')+' '+(data.value?.name||props.serverId)+' ('+(data.value?.address||'')+')',cancel:true,persistent:true,ok:{label:t('Confirm'),color:action==='shutdown'?'negative':'primary'}}).onOk(()=>{if(current===generation)void execute(action)})
+  const expected=execution()
+  if(!expected)return
+  dialog=q.dialog({title:t(action==='start'?'power.start':'power.stop'),message:t(action==='start'?'power.confirmStart':'power.confirmStop')+' '+(data.value?.name||expected.server)+' ('+(data.value?.address||'')+')',cancel:true,persistent:true,ok:{label:t('Confirm'),color:action==='shutdown'?'negative':'primary'}}).onOk(()=>{dialog=undefined;if(expected.generation===generation&&expected.source.current())void execute(action,expected)})
 }
-async function save(){const current=generation;saving.value=true;error.value='';try{await serverPowerApi.save(props.serverId,{...form.value,version:formVersion.value});if(current===generation){await refresh(true);showSettings.value=false}}catch(cause){if(current===generation)error.value=failure(cause)}finally{if(current===generation)saving.value=false}}
-function reconcile(job:any){const current=generation;q.dialog({title:t('power.reconcile'),message:t('power.reconcileHelp'),cancel:true,persistent:true}).onOk(async()=>{if(current!==generation)return;busy.value=true;try{await serverPowerApi.reconcile(props.serverId,job.id);if(current===generation)await refresh()}catch(cause){if(current===generation)error.value=failure(cause)}finally{if(current===generation)busy.value=false}})}
+async function save(){const current=generation,selected=source.value,server=props.serverId,body={...form.value,version:formVersion.value};if(!selected?.current()||loaded.value?.server!==server||loaded.value?.source!==JSON.stringify(selected.identity))return;saving.value=true;error.value='';try{await createServerPowerApi(selected).save(server,body);if(current===generation&&selected.current()){await refresh(true);showSettings.value=false}}catch(cause){if(current===generation)error.value=failure(cause)}finally{if(current===generation)saving.value=false}}
+function reconcile(job:any){const current=generation,selected=source.value,server=props.serverId,jobId=job.id;if(!selected?.current()||loaded.value?.server!==server||loaded.value?.source!==JSON.stringify(selected.identity))return;dialog=q.dialog({title:t('power.reconcile'),message:t('power.reconcileHelp'),cancel:true,persistent:true}).onOk(async()=>{dialog=undefined;if(current!==generation||!selected.current())return;busy.value=true;try{await createServerPowerApi(selected).reconcile(server,jobId);if(current===generation&&selected.current())await refresh()}catch(cause){if(current===generation)error.value=failure(cause)}finally{if(current===generation)busy.value=false}})}
 </script>
 <template>
   <q-card v-if="!data||data.provider_supported" flat bordered class="server-power q-mb-md">
