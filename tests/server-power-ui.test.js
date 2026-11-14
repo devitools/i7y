@@ -76,3 +76,14 @@ test('fresh observations remain visible while a running request still takes prec
 test('power result icons resolve to available Material Symbols',()=>{
   for(const icon of ['info_outline','error_outline','help_outline'])assert.equal(materialSymbol(icon).icon,'sym_o_'+icon.replace('_outline',''))
 })
+
+test('a failed provider check says no command was sent while uncertain dispatch stays unknown',()=>{
+  const failure={action:'start',status:'failed',stage:'failed',reason:'provider_unavailable'}
+  const view=presentPowerResult(failure,true)
+  assert.equal(view.tone,'warning')
+  assert.equal(view.title,'power.result.providerUnavailable')
+  assert.equal(view.detail,'power.result.providerUnavailableHelp')
+  const uncertain=presentPowerResult({...failure,status:'unknown',stage:'unknown'},true)
+  assert.equal(uncertain.title,'power.stage.unknown')
+  assert.notEqual(uncertain.detail,view.detail)
+})

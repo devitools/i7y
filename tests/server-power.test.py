@@ -42,11 +42,12 @@ class Boot:
         self.reads = 0
         self.secrets = []
         self.available = True
+        self.powered = lambda: True
         self.closed = False
 
     def status(self):
         self.reads += 1
-        return self.available
+        return self.available and self.powered()
 
     def unlock(self, secret):
         self.secrets.append(secret)
@@ -59,6 +60,7 @@ class PowerTests(unittest.TestCase):
     def setUp(self):
         self.provider = Provider(None)
         self.boot = Boot(None)
+        self.boot.powered = lambda: self.provider.power
         self.output = io.StringIO()
         self.secret = 'fixture-disk-secret'
         self.vault = patch.object(power, 'vault_item', return_value={'fields': [{'label': 'Disk Encryption Password', 'value': self.secret}]})
@@ -75,7 +77,7 @@ class PowerTests(unittest.TestCase):
         result = self.run_action()
         self.assertEqual(result['status'], 'awaiting_agent')
         self.assertEqual(self.provider.changes, ['start'])
-        self.assertEqual(self.boot.reads, 2)
+        self.assertEqual(self.boot.reads, 3)
         self.assertEqual(self.boot.secrets, [self.secret])
         self.assertTrue(self.boot.closed)
         self.assertNotIn(self.secret, self.output.getvalue() + json.dumps(result))
@@ -94,8 +96,67 @@ class PowerTests(unittest.TestCase):
         self.boot.unlock = lambda secret: steps.append('unlock')
         result = self.run_action()
         self.assertEqual(self.provider.changes, [])
-        self.assertEqual(steps, ['power-state', 'disk-prompt', 'disk-prompt', 'vault-read', 'unlock'])
+        self.assertEqual(steps, ['disk-prompt', 'disk-prompt', 'vault-read', 'unlock'])
         self.assertEqual(result, {'status': 'awaiting_agent', 'stage': 'awaiting_agent'})
+
+    def test_confirmed_locked_disk_starts_without_constructing_or_logging_into_the_provider(self):
+        self.provider.power = True
+        with patch.object(power, 'Provider', side_effect=AssertionError('provider must not be used')) as provider:
+            with contextlib.redirect_stdout(self.output):
+                result = power.run(copy.deepcopy(REQUEST), provider_factory=provider, boot_factory=lambda _: self.boot)
+        self.assertEqual(result, {'status': 'awaiting_agent', 'stage': 'awaiting_agent'})
+        provider.assert_not_called()
+        self.assertEqual(self.boot.reads, 2)
+        self.assertEqual(self.boot.secrets, [self.secret])
+        self.assertTrue(self.boot.closed)
+        self.read_vault.assert_called_once_with(REQUEST['target']['disk_credential'])
+
+    def test_disk_inspection_does_not_need_provider_login_when_boot_proves_it_is_locked(self):
+        self.provider.power = True
+        request = copy.deepcopy(REQUEST)
+        request['action'] = 'inspect'
+        provider = unittest.mock.Mock(side_effect=AssertionError('provider must not be used'))
+        with contextlib.redirect_stdout(self.output):
+            result = power.run(request, provider_factory=provider, boot_factory=lambda _: self.boot)
+        self.assertEqual(result, {'status': 'observed', 'stage': 'disk_locked'})
+        provider.assert_not_called()
+        self.assertEqual(self.boot.reads, 1)
+        self.assertEqual(self.boot.secrets, [])
+        self.assertTrue(self.boot.closed)
+        self.read_vault.assert_not_called()
+
+    def test_disappearing_disk_prompt_never_sends_password_or_requests_power(self):
+        self.boot.status = unittest.mock.Mock(side_effect=[True, False])
+        provider = unittest.mock.Mock(side_effect=AssertionError('provider must not be used'))
+        with contextlib.redirect_stdout(self.output):
+            result = power.run(copy.deepcopy(REQUEST), provider_factory=provider, boot_factory=lambda _: self.boot)
+        self.assertEqual(result['status'], 'requires_console')
+        provider.assert_not_called()
+        self.assertEqual(self.boot.secrets, [])
+        self.assertTrue(self.boot.closed)
+        self.read_vault.assert_not_called()
+
+    def test_unavailable_initial_boot_probe_falls_back_to_provider_without_restarting_powered_server(self):
+        self.provider.power = True
+        self.boot.status = unittest.mock.Mock(side_effect=[False, True, True])
+        self.provider.login = unittest.mock.Mock()
+        self.provider.state = unittest.mock.Mock(return_value=True)
+        result = self.run_action()
+        self.assertEqual(result['status'], 'awaiting_agent')
+        self.provider.login.assert_called_once_with()
+        self.provider.state.assert_called_once_with()
+        self.assertEqual(self.provider.changes, [])
+        self.assertEqual(self.boot.secrets, [self.secret])
+
+    def test_initial_boot_identity_mismatch_stops_before_provider_and_vault_access(self):
+        self.boot.status = unittest.mock.Mock(side_effect=power.Failure('boot_identity_mismatch'))
+        provider = unittest.mock.Mock(side_effect=AssertionError('provider must not be used'))
+        with contextlib.redirect_stdout(self.output), self.assertRaises(power.Failure) as error:
+            power.run(copy.deepcopy(REQUEST), provider_factory=provider, boot_factory=lambda _: self.boot)
+        self.assertEqual(error.exception.reason, 'boot_identity_mismatch')
+        provider.assert_not_called()
+        self.read_vault.assert_not_called()
+        self.assertTrue(self.boot.closed)
 
     def test_already_powered_on_without_remote_unlock_keeps_console_pending(self):
         self.provider.power = True
@@ -421,9 +482,11 @@ class VaultConfigurationTests(unittest.TestCase):
         request['target']['provider_credential']['account'] = 'provider-account'
         request['target']['disk_credential']['account'] = 'server-account'
         provider = Provider(None)
+        boot = Boot(None)
+        boot.powered = lambda: provider.power
         targets = []
         with patch.object(power, 'vault_item', return_value={'fields': [{'label': 'Disk Encryption Password', 'value': 'fixture'}]}) as read, contextlib.redirect_stdout(io.StringIO()):
-            power.run(request, lambda target: targets.append(target) or provider, lambda _: Boot(None))
+            power.run(request, lambda target: targets.append(target) or provider, lambda _: boot)
         self.assertEqual(targets[0]['provider_credential']['account'], 'provider-account')
         self.assertEqual(read.call_args.args[0]['account'], 'server-account')
 

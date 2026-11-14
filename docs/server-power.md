@@ -111,7 +111,13 @@ passwords and raw subprocess output remain in process memory; only allowlisted
 progress/result codes reach the UI and history. Temporary SSH configuration contains
 public host keys and identity paths, has private permissions and is removed afterward.
 
-**Start server** requests power on only if SNEL reports the VM off. An already running VM
+With remote unlock configured, **Start server** first queries the pinned boot endpoint.
+If it confirms the configured disk is waiting for its password, the desktop proceeds
+to unlock without logging into SNEL or sending a power command. It checks the disk
+again before reading the password. **Check SNEL status** can also report this direct
+disk observation when the provider API is unavailable, without accessing credentials.
+If the initial boot query cannot confirm a locked disk, **Start server** checks SNEL
+and requests power on only if SNEL reports the VM off. An already running VM
 is not shut down or rebooted. **Shut down server** requests graceful `shutdown` and waits
 for SNEL to report power off; it never invokes force-stop or reset. An uncertain API
 mutation is not retried. Another mutation remains blocked until an administrator
@@ -119,14 +125,14 @@ inspects the provider console and explicitly reconciles the operation. Reconcili
 does not assert infrastructure recovery.
 
 **Check SNEL status** reports the current power observation separately from a previous
-startup result. With remote unlock configured, it also queries the pinned boot endpoint
+startup result. With remote unlock configured, it first queries the pinned boot endpoint
 to detect a locked disk, without reading or sending the disk password. Power on alone
 does not confirm operating-system readiness. Each result displays its own observation
 time; a later inspection cannot refresh the timestamp of an earlier startup success.
 A fresh observation remains visible even if an older start result is uncertain.
 An administrator can choose **Retry start** after checking the console. Its confirmation
-reconciles the previous attempt before creating a new request, which checks provider
-power and the disk prompt again. Running requests cannot be retried. A failed
+reconciles the previous attempt before creating a new request, which checks the disk
+prompt and, if needed, provider power again. Running requests cannot be retried. A failed
 reconciliation or a changed session prevents dispatch.
 
 The desktop waits up to three minutes for boot SSH and up to three minutes for the

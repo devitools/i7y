@@ -1,4 +1,6 @@
 const en={
+ "power.result.providerUnavailable":"Could not check server power with SNEL",
+ "power.result.providerUnavailableHelp":"SNEL is temporarily unavailable or limiting requests. No power command or disk password was sent. Wait a moment before trying again.",
  "power.retryStart":"Retry start",
  "power.confirmRetryStart":"Confirm that you checked the console and the previous attempt is no longer in progress. Retry will check power and the disk prompt before sending a new request:",
  "power.retryHelp":"The previous attempt was not confirmed. If the console is still waiting for the disk password, use Retry start.",
@@ -53,6 +55,8 @@ const en={
  "vault.unsupported":"unavailable",
 }
 const pt={
+ "power.result.providerUnavailable":"Não foi possível consultar a energia na SNEL",
+ "power.result.providerUnavailableHelp":"A SNEL está temporariamente indisponível ou limitando consultas. Nenhum comando de energia ou senha de disco foi enviado. Aguarde um pouco antes de tentar novamente.",
  "power.retryStart":"Tentar ligar novamente",
  "power.confirmRetryStart":"Confirme que conferiu o console e a tentativa anterior não está mais em andamento. A nova tentativa verificará a energia e o pedido da senha do disco antes de enviar outra solicitação:",
  "power.retryHelp":"A tentativa anterior não foi confirmada. Se o console ainda aguarda a senha do disco, use Tentar ligar novamente.",
@@ -107,6 +111,8 @@ const pt={
  "vault.unsupported":"indisponível",
 }
 const uk={
+ "power.result.providerUnavailable":"Не вдалося перевірити живлення сервера через SNEL",
+ "power.result.providerUnavailableHelp":"SNEL тимчасово недоступний або обмежує запити. Команду живлення чи пароль диска не надіслано. Зачекайте трохи й повторіть спробу.",
  "power.retryStart":"Повторити запуск",
  "power.confirmRetryStart":"Підтвердьте, що перевірили консоль і попередня спроба вже не виконується. Перед новим запитом буде перевірено живлення та запит пароля диска:",
  "power.retryHelp":"Попередню спробу не підтверджено. Якщо консоль очікує пароль диска, натисніть Повторити запуск.",

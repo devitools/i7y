@@ -303,9 +303,30 @@ class Boot:
         self.directory.cleanup()
 
 
+def unlock_disk(target, boot):
+    emit(kind='progress', stage='checking_boot')
+    if not boot.status():
+        return {'status': 'requires_console', 'stage': 'requires_console', 'reason': 'boot_unavailable'}
+    secret = field(vault_item(target['disk_credential']), 'Disk Encryption Password')
+    emit(kind='progress', stage='unlocking_disk')
+    boot.unlock(secret)
+    secret = None
+    return {'status': 'awaiting_agent', 'stage': 'awaiting_agent'}
+
+
 def run(request, provider_factory=Provider, boot_factory=Boot, sleep=time.sleep, clock=time.monotonic):
     validate(request)
     target, action = dict(request['target']), request['action']
+    if action in ['start', 'inspect'] and target.get('boot_host_key') and target.get('luks_uuid'):
+        emit(kind='progress', stage='checking_boot')
+        boot = boot_factory(request)
+        try:
+            if boot.status():
+                if action == 'inspect':
+                    return {'status': 'observed', 'stage': 'disk_locked'}
+                return unlock_disk(target, boot)
+        finally:
+            boot.close()
     provider = provider_factory(target)
     emit(kind='progress', stage='checking_provider')
     provider.login()
@@ -360,14 +381,7 @@ def run(request, provider_factory=Provider, boot_factory=Boot, sleep=time.sleep,
             sleep(3)
         else:
             return {'status': 'requires_console', 'stage': 'requires_console', 'reason': 'boot_unavailable'}
-        emit(kind='progress', stage='checking_boot')
-        if not boot.status():
-            return {'status': 'requires_console', 'stage': 'requires_console', 'reason': 'boot_unavailable'}
-        secret = field(vault_item(target['disk_credential']), 'Disk Encryption Password')
-        emit(kind='progress', stage='unlocking_disk')
-        boot.unlock(secret)
-        secret = None
-        return {'status': 'awaiting_agent', 'stage': 'awaiting_agent'}
+        return unlock_disk(target, boot)
     finally:
         boot.close()
 
