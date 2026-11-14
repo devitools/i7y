@@ -37,6 +37,13 @@ test('session restoration preserves valid credentials during transient failures'
   }
 })
 
+test('an empty frontend store does not sign out a native session whose restoration can be retried',async()=>{
+  let signedOut=false
+  const store={isValid:false,token:'',record:null}
+  assert.equal(await restoreSession({refreshSession:async()=>assert.fail('An empty store cannot refresh'),signOut:()=>signedOut=true},store),false)
+  assert.equal(signedOut,false)
+})
+
 test('a stale session refresh failure cannot sign out a replacement session',async()=>{
   const store={isValid:true,token:'old',record:{collectionName:'users'}}
   assert.equal(await restoreSession({refreshSession:async()=>{store.token='new';throw {status:401}},signOut:()=>assert.fail('New session must remain active')},store),true)

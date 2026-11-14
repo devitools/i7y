@@ -7,13 +7,14 @@ import ts from 'typescript'
 import PocketBase, {BaseAuthStore} from 'pocketbase'
 import * as vue from 'vue'
 import { createOrganizationTransport } from '../apps/web/src/organization-context.ts'
+import { restoreSession } from '../apps/web/src/session-lifecycle.ts'
 
 const marker='native.'+Buffer.from(JSON.stringify({exp:Math.floor(Date.now()/1000)+86400})).toString('base64url')+'.session'
 function harness() {
   const profiles=[{id:'a',name:'A',url:'https://a.test/'}]
   const nativeSessions=new Map([['a',{token:'secret-a',record:{id:'identical-user',collectionName:'users',email:'a@test'}}]])
   let selected='a',blocked
-  const storage=new Map(),calls=[]
+  const storage=new Map(),calls=[],restoreErrors=new Map()
   const invoke=async(command,args={})=>{
     calls.push({command,args})
     if(command==='get_connections')return {items:profiles.map(profile=>({...profile})),selected}
@@ -23,7 +24,7 @@ function harness() {
     if(command==='desktop_session_context')return
     if(command==='desktop_connection_logout'){nativeSessions.delete(args.connectionId);return}
     if(command==='remove_connection'){nativeSessions.delete(args.connectionId);profiles.splice(profiles.findIndex(profile=>profile.id===args.connectionId),1);if(selected===args.connectionId)selected=profiles[0]?.id || '';return}
-    if(command==='desktop_session_restore'){const session=nativeSessions.get(args.connectionId);return session?{token:marker,record:session.record}:null}
+    if(command==='desktop_session_restore'){if(restoreErrors.has(args.connectionId))throw restoreErrors.get(args.connectionId);const session=nativeSessions.get(args.connectionId);return session?{token:marker,record:session.record}:null}
     if(command==='backend_request'){
       const profile=profiles.find(profile=>profile.id===args.connectionId)
       assert.equal(new URL(args.url).origin,new URL(profile.url).origin)
@@ -53,8 +54,39 @@ function harness() {
     vm.runInNewContext(code,{module,exports:module.exports,require,localStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,String(value)),removeItem:key=>storage.delete(key)},window:{location:{origin:'https://ui.test'}},Response,Request,Headers,AbortController,DOMException,URL,URLSearchParams,fetch,setTimeout,clearTimeout,console},{filename})
     return module.exports
   }
-  return {api:load('api'),clients:load('connection-clients'),nativeSessions,calls,block:()=>{let release;blocked=new Promise(resolve=>release=resolve);return release}}
+  return {api:load('api'),clients:load('connection-clients'),nativeSessions,calls,restoreErrors,block:()=>{let release;blocked=new Promise(resolve=>release=resolve);return release}}
 }
+test('startup during a selected backend outage preserves native credentials and automatically restores only that source after recovery',async()=>{
+  for(const failure of [{status:503},new Error('Unable to validate session')]){
+    const h=harness()
+    await h.api.addConnection('https://b.test/','B')
+    await h.api.desktopAuthApi.forConnection('b').exchange('proof','verifier')
+    h.restoreErrors.set('a',failure)
+    await h.api.initializeDesktopBackend()
+    assert.equal(h.api.authStore.isValid,false)
+    assert.equal(h.clients.connectionClient('a').unavailable,true)
+    assert.deepEqual(Array.from(h.api.connectedSources(),source=>source.id),['b'])
+    assert.equal(await restoreSession(h.api.management,h.api.authStore),false)
+    await new Promise(resolve=>setImmediate(resolve))
+    assert.equal(h.calls.some(call=>call.command==='desktop_connection_logout'),false)
+    assert.equal(h.nativeSessions.get('a').token,'secret-a')
+    assert.equal(h.nativeSessions.get('b').token,'secret-b')
+    assert.equal(h.clients.connectionClient('a').unavailable,true)
+    const changes=[]
+    const unsubscribe=h.api.authStore.onChange((token,record)=>{if(token)changes.push(record.email)})
+    h.restoreErrors.delete('a')
+    await h.api.refreshConnectedOrganizations()
+    unsubscribe()
+    assert.equal(h.api.authStore.isValid,true)
+    assert.equal(h.api.authStore.record.email,'a@test')
+    assert.deepEqual(changes,['a@test'])
+    assert.equal(h.clients.connectionClient('a').unavailable,false)
+    assert.deepEqual(Array.from(h.api.connectedSources(),source=>source.id).sort(),['a','b'])
+    assert.equal(h.nativeSessions.get('b').token,'secret-b')
+    assert.equal(h.api.activeConnectionId.value,'a')
+    assert.equal(h.calls.some(call=>call.command==='desktop_connection_logout'),false)
+  }
+})
 test('adding and logging into B preserves A; source-fixed mutations and logout affect only their profile',async()=>{
   const {api,nativeSessions,calls}=harness()
   await api.initializeDesktopBackend()

@@ -9,7 +9,7 @@ interface SessionApi {
 }
 export async function restoreSession(api: SessionApi, store: SessionStore): Promise<boolean> {
   const valid=()=>store.isValid && store.record?.collectionName==='users'
-  if(!valid()){api.signOut();return false}
+  if(!valid()){if(store.token)api.signOut();return false}
   const token=store.token
   try {await api.refreshSession()}
   catch(error) {if([400,401,403].includes(error?.status) && store.token===token)api.signOut()}
